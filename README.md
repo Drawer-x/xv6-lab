@@ -23,41 +23,41 @@ ECNU-OSLAB-2025-TASK
 ├── Makefile
 ├── common.mk
 ├── kernel.ld
-├── pictures              # 实验截图存放目录
-├── README.md             # 实验报告
+├── pictures # 实验截图存放目录
+├── README.md # 实验报告
 └── src
 └── kernel
-├── arch          # RISC-V 架构相关
-│   ├── method.h
-│   ├── mod.h
-│   └── type.h
-├── boot          # 启动流程
-│   ├── entry.S
-│   └── start.c
-├── lock          # 自旋锁
-│   ├── spinlock.c
-│   ├── method.h
-│   ├── mod.h
-│   └── type.h
-├── lib           # 常用库
-│   ├── cpu.c
-│   ├── print.c
-│   ├── uart.c
-│   ├── utils.c
-│   ├── method.h
-│   ├── mod.h
-│   └── type.h
-├── mem           # ⭐ 内存管理模块
-│   ├── pmem.c    # 物理内存管理
-│   ├── kvm.c     # 内核虚拟内存管理
-│   ├── method.h
-│   ├── mod.h
-│   └── type.h
-├── trap          # 中断模块（预留）
-│   ├── method.h
-│   ├── mod.h
-│   └── type.h
-└── main.c        # 内核入口
+├── arch # RISC-V 架构相关
+│ ├── method.h
+│ ├── mod.h
+│ └── type.h
+├── boot # 启动流程
+│ ├── entry.S
+│ └── start.c
+├── lock # 自旋锁
+│ ├── spinlock.c
+│ ├── method.h
+│ ├── mod.h
+│ └── type.h
+├── lib # 常用库
+│ ├── cpu.c
+│ ├── print.c
+│ ├── uart.c
+│ ├── utils.c
+│ ├── method.h
+│ ├── mod.h
+│ └── type.h
+├── mem # ⭐ 内存管理模块
+│ ├── pmem.c # 物理内存管理
+│ ├── kvm.c # 内核虚拟内存管理
+│ ├── method.h
+│ ├── mod.h
+│ └── type.h
+├── trap # 中断模块（预留）
+│ ├── method.h
+│ ├── mod.h
+│ └── type.h
+└── main.c # 内核入口
 
 
 
@@ -132,7 +132,7 @@ void pmem_free(uint64 page, bool in_kernel) {
     r->allocable++;
     spinlock_release(&r->lk);
 }
-
+```
 
 **实验截图**
 ![物理内存管理](pictures/test11.png)
