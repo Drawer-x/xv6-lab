@@ -1,7 +1,7 @@
 
 ---
 
-```markdown
+
 # LAB-2: 内存管理初步
 
 ## 1. 实验目标
@@ -14,7 +14,7 @@
 
 ## 2. 代码组织结构
 
-```
+
 
 ECNU-OSLAB-2025-TASK
 ├── LICENSE
@@ -59,7 +59,7 @@ ECNU-OSLAB-2025-TASK
 │   └── type.h
 └── main.c        # 内核入口
 
-````
+
 
 ---
 
@@ -132,11 +132,11 @@ void pmem_free(uint64 page, bool in_kernel) {
     r->allocable++;
     spinlock_release(&r->lk);
 }
-````
+
 
 **实验截图**
-![物理内存管理](pictures/test1.1.png)
-![ ](pictures/test1.2.png)
+![物理内存管理](pictures/test11.png)
+![ ](pictures/test12.png)
 
 ---
 
@@ -151,9 +151,9 @@ void pmem_free(uint64 page, bool in_kernel) {
   * 再次分配，确认页面已被清零。
 
 **实验截图**
-![物理内存测试case1](pictures/test2.1.1.png)
-![  ](pictures/test2.1.2.png)
-![物理内存测试case2](pictures/test2.2.png)
+![物理内存测试case1](pictures/test211.png)
+![  ](pictures/test212.png)
+![物理内存测试case2](pictures/test22.png)
 
 ---
 
@@ -319,10 +319,6 @@ void kvm_inithart()
 * 初步实现了 **虚拟内存管理**：页表查找、映射、解映射。
 * 理解了 **共享资源并发管理**（自旋锁）在内存管理中的作用。
 * 通过 `panic` 与 `assert` 学会了 **防御性编程**，提高 Debug 效率。
-
----
-
-```
 
 ---
 
