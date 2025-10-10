@@ -1,76 +1,36 @@
 #include "arch/mod.h"
 #include "lib/mod.h"
 #include "mem/mod.h"
+#include "trap/mod.h" // 假设包含时钟、中断相关声明
 
-void test_mapping_and_unmapping()
-{
-    // 1. 初始化测试页表
-    pte_t* pte;
-    pgtbl_t pgtbl = (pgtbl_t)pmem_alloc(true);
-    memset(pgtbl, 0, PGSIZE);
-
-    // 2. 准备测试条件
-    uint64 va_1 = 0x100000;
-    uint64 va_2 = 0x8000;
-    uint64 pa_1 = (uint64)pmem_alloc(false);
-    uint64 pa_2 = (uint64)pmem_alloc(false);
-
-    // 3. 建立映射
-    vm_mappages(pgtbl, va_1, pa_1, PGSIZE, PTE_R | PTE_W);
-    vm_mappages(pgtbl, va_2, pa_2, PGSIZE, PTE_R | PTE_W);
-
-
-    // 4. 验证映射结果
-    pte = vm_getpte(pgtbl, va_1, false);
-    assert(pte != NULL, "test_mapping_and_unmapping: pte_1 not found");
-    assert((*pte & PTE_V) != 0, "test_mapping_and_unmapping: pte_1 not valid");
-    assert(PTE_TO_PA(*pte) == pa_1, "test_mapping_and_unmapping: pa_1 mismatch");
-    assert((*pte & (PTE_R | PTE_W)) == (PTE_R | PTE_W),
-           "test_mapping_and_unmapping: flag_1 mismatch");
-
-    pte = vm_getpte(pgtbl, va_2, false);
-    assert(pte != NULL, "test_mapping_and_unmapping: pte_2 not found");
-    assert((*pte & PTE_V) != 0, "test_mapping_and_unmapping: pte_2 not valid");
-    assert(PTE_TO_PA(*pte) == pa_2, "test_mapping_and_unmapping: pa_2 mismatch");
-    assert((*pte & (PTE_R | PTE_W)) == (PTE_R | PTE_W),
-           "test_mapping_and_unmapping: flag_2 mismatch");
-
-    // 5. 解除映射
-    vm_unmappages(pgtbl, va_1, PGSIZE, true);
-    vm_unmappages(pgtbl, va_2, PGSIZE, true);
-
-    // 6. 验证解除映射结果
-    pte = vm_getpte(pgtbl, va_1, false);
-    assert(pte != NULL, "test_mapping_and_unmapping: pte_1 not found");
-    assert((*pte & PTE_V) == 0, "test_mapping_and_unmapping: pte_1 still valid");
-
-    pte = vm_getpte(pgtbl, va_2, false);
-    assert(pte != NULL, "test_mapping_and_unmapping: pte_2 not found");
-    assert((*pte & PTE_V) == 0, "test_mapping_and_unmapping: pte_2 still valid");
-
-    printf("test_mapping_and_unmapping passed!\n");
-}
-
-/*---------------------------------- 主函数 ----------------------------------*/
+// 全局变量，标记各 CPU 是否已完成启动打印
+int cpu_booted[2] = {0, 0}; 
 
 int main()
 {
-    int cpuid = r_tp();
+    int cpuid = r_tp(); // 获取当前 CPU 核心 ID
 
-    if (cpuid == 0) {
-        print_init();
-        pmem_init();
-        kvm_init();
-        kvm_inithart();
-
-        printf("cpu %d is booting!\n", cpuid);
-        __sync_synchronize();
-
-        // 运行测试
-        test_mapping_and_unmapping();
-    } else {
-        while (1);
+    // 1. CPU 启动提示（每个 CPU 仅在首次执行时打印）
+    if (cpuid < 2) { // 假设最多 2 个 CPU 核心
+        if (cpu_booted[cpuid] == 0) {
+            printf("cpu %d is booting!\n", cpuid);
+            cpu_booted[cpuid] = 1;
+        }
     }
 
-    while (1);
+    // 2. 仅 CPU-0 初始化全局资源（避免多核心重复初始化）
+    if (cpuid == 0) {
+        trap_kernel_init(); // 初始化全局资源：PLIC、UART、全局时钟
+        printf("OS started on CPU %d\n", cpuid);
+        printf("Initial system ticks: %lld (1 tick ≈ 0.1s)\n", timer_get_ticks());
+    }
+
+    // 3. 每个核心初始化私有中断资源（所有核心必须执行）
+    trap_kernel_inithart(); // 设置中断向量、使能 S-mode 中断
+
+    // 4. 死循环：等待中断（CPU 休眠，降低功耗）
+    while (1) {
+        asm volatile("wfi"); // Wait For Interrupt：无中断时 CPU 进入休眠
+    }
+    return 0;
 }
