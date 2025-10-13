@@ -14,17 +14,16 @@ void start()
     w_satp(0);
 
     // 2. 保存当前CPU核心ID（hartid）到tp寄存器（后续mycpuid()通过tp读取）
-    int cpuid = r_mhartid();
-    w_tp(cpuid);
+    int id = r_mhartid();
+    w_tp(id);
 
     // 3. 委托S-mode处理所有trap（中断+异常，减少M-mode干预）
     // 3.1 中断委托（mideleg）：将S-mode应处理的中断委托给S-mode
     uint64 mideleg = 0;
-    mideleg |= (1 << 1);   // 委托S-mode软件中断（时钟中断转发依赖此位）
-    mideleg |= (1 << 9);   // 委托S-mode外部中断（UART中断依赖此位）
-    mideleg |= (1 << 5);   // 委托S-mode定时器中断（备用，避免M-mode拦截）
-    w_mideleg(mideleg);    // 写入M-mode中断委托寄存器
-
+    mideleg |= (1 << 1);   // 软件中断
+    mideleg |= (1 << 5);   // 时钟中断  
+    mideleg |= (1 << 9);   // 外部中断
+    w_mideleg(mideleg);
     // 3.2 异常委托（medeleg）：将所有异常委托给S-mode（简化调试，避免M-mode卡死）
     uint64 medeleg = r_medeleg();
     medeleg |= 0xFFFF;     // 委托所有16类异常（S-mode可通过trap_handler处理）
@@ -38,7 +37,7 @@ void start()
     uint64 status = r_mstatus();
     status &= ~MSTATUS_MPP_MASK;  // 清除原有特权级（MPP：Previous Privilege Mode）
     status |= MSTATUS_MPP_S;      // 设置上一个特权级为S-mode
-    status |= MSTATUS_MIE;        // 开启M-mode全局中断（否则时钟中断不触发）
+    //status |= MSTATUS_MIE;        // 开启M-mode全局中断（否则时钟中断不触发）
     w_mstatus(status);
 
     // 6. 设置M-mode的返回地址（mepc）：指向S-mode的入口函数main()

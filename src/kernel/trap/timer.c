@@ -11,7 +11,7 @@ extern void timer_vector();
 // 每个CPU在时钟中断中需要的临时空间
 static uint64 mscratch[NCPU][5];
 
-// 时钟初始化
+// timer.c - 正常的timer_init函数
 void timer_init()
 {
     // 获取当前cpuid
@@ -20,8 +20,12 @@ void timer_init()
     // 设置初始值 cmp_time = cur_time + time_interval
     *(uint64*)CLINT_MTIMECMP(hartid) = *(uint64*)CLINT_MTIME + INTERVAL;
 
-    // cur_mscratch 指向当前CPU的msrcatch数组
-    uint64* cur_mscratch = mscratch[hartid];
+    // cur_mscratch 指向当前CPU的mscratch数组
+    volatile uint64* cur_mscratch = mscratch[hartid];
+
+    if (cur_mscratch == 0) {
+        return;
+    }
 
     // cur_mscratch[1] [2] [3]先空着, 在trap.S里使用
     cur_mscratch[3] = CLINT_MTIMECMP(hartid); // cmp_time
@@ -39,7 +43,6 @@ void timer_init()
     // 打开 M-mode 时钟中断分开关
     w_mie(r_mie() | MIE_MTIE);
 }
-
 /*--------------------- 工作在S-mode --------------------*/
 
 // 全局系统时钟

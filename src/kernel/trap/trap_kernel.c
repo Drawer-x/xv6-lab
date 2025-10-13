@@ -50,6 +50,7 @@ extern void kernel_vector();
 // 初始化trap中各个核心共享的东西
 void trap_kernel_init()
 {
+    uart_init();  
     // PLIC初始化
     plic_init();
 
@@ -75,40 +76,70 @@ void trap_kernel_inithart()
 // 内核态trap处理的核心逻辑
 void trap_kernel_handler()
 {
-    uint64 sepc = r_sepc();       // 记录了发生异常时的PC值
-    uint64 sstatus = r_sstatus(); // 与特权模式和中断相关的状态信息
-    uint64 scause = r_scause();   // 引发trap的原因
-    uint64 stval = r_stval();     // 发生trap时保存的附加信息 (不同trap类型不一样)
+    uint64 sepc = r_sepc();
+    uint64 sstatus = r_sstatus();
+    uint64 scause = r_scause();
+    uint64 stval = r_stval();
 
-    // 确认trap来自S-mode且此时trap处于关闭状态
-    assert(sstatus & SSTATUS_SPP, "trap_kernel_handler: not from s-mode");
-    assert(intr_get() == 0, "trap_kernel_handler: interreput enabled");
+    assert((sstatus & SSTATUS_SPP) != 0, "trap_kernel_handler: not from s-mode");
+    assert(intr_get() == 0, "trap_kernel_handler: interrupt enabled");
 
     int trap_id = scause & 0xf;
 
-    /* 高位bit标识了是中断还是异常 */
     if (scause & 0x8000000000000000ul) {
-        // 1-中断处理
-        switch (trap_id) // 中断产生原因分类
-        {
-        case 1:  // S-mode软件中断（时钟中断转发过来的）
-            timer_interrupt_handler();  // 调用时钟中断处理
+        // 中断处理
+        switch (trap_id) {
+        case 1:
+            timer_interrupt_handler();
             break;
-        case 9:  // S-mode外部中断（UART中断）
-            external_interrupt_handler();// 调用外设中断处理
+        case 5:
+            timer_interrupt_handler();
             break;
-
-        default: // 例外处理
+        case 9:
+            external_interrupt_handler();  // 调用统一的外部中断处理
+            break;
+        default:
+            // 使用interrupt_info数组
             printf("\nunexpected interrupt: %s\n", interrupt_info[trap_id]);
             printf("trap_id = %d, sepc = %p, stval = %p\n", trap_id, sepc, stval);
             panic("trap_kernel_handler");
         }
     } else {
-        // 2-异常处理
-        switch (trap_id) // 异常产生原因分类
-        {
-
-        default: // 例外处理
+        // 异常处理
+        switch (trap_id) {
+        case 0:
+        case 1:
+            printf("\n[EXCEPTION] %s\n", exception_info[trap_id]);
+            printf("  sepc: %p\n", sepc);
+            printf("  stval: %p\n", stval);
+            panic("instruction access fault");
+        case 2:
+            printf("\n[EXCEPTION] %s\n", exception_info[trap_id]);
+            printf("  sepc: %p\n", sepc);
+            printf("  instruction at sepc: 0x%lx\n", *(uint64*)sepc);
+            panic("illegal instruction");
+        case 5:
+        case 7:
+            printf("\n[EXCEPTION] %s\n", exception_info[trap_id]);
+            printf("  sepc: %p\n", sepc);
+            printf("  stval: %p\n", stval);
+            panic("memory access fault");
+        case 8:
+            printf("[SYSCALL] %s at %p\n", exception_info[trap_id], sepc);
+            w_sepc(sepc + 4);
+            break;
+        case 9:
+            printf("[S-MODE ECALL] %s at %p\n", exception_info[trap_id], sepc);
+            w_sepc(sepc + 4);
+            break;
+        case 12:
+        case 13:
+        case 15:
+            printf("[PAGE FAULT] %s at address %p\n", exception_info[trap_id], stval);
+            printf("  sepc: %p\n", sepc);
+            panic("page fault not implemented");
+        default:
+            // 使用exception_info数组
             printf("\nunexpected exception: %s\n", exception_info[trap_id]);
             printf("trap_id = %d, sepc = %p, stval = %p\n", trap_id, sepc, stval);
             panic("trap_kernel_handler");
@@ -120,7 +151,7 @@ void trap_kernel_handler()
 void external_interrupt_handler()
 {
     // 1. 无需传入cpuid，函数内部会获取当前CPU核心ID
-    int irq = plic_claim();  // 修正：删除cpuid参数
+    int irq = plic_claim();
 
     // 2. 判断中断源：若为UART中断则调用uart_intr
     if (irq == UART_IRQ)  // UART_IRQ需与硬件匹配（如QEMU中为10）
@@ -144,6 +175,6 @@ void timer_interrupt_handler()
         timer_update();
     // 清除 SSIP bit (S-mode software interrupt pending)
     // 宣布 S-mode 软件中断处理完成
-    // 在 trap.S 里面有对应的两条命令, 去找找
+    // 在 trap.S 里面有对应的两条命令, 去找找对应 trap.S 中的 "li a1, 2" 和 "csrw sip, a1"
     w_sip(r_sip() & ~2);
 }
