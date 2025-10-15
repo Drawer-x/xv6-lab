@@ -53,6 +53,13 @@ void trap_kernel_init()
     uart_init();  
     // PLIC初始化
     plic_init();
+    
+
+  // 开启S-mode全局中断（允许CPU响应外部中断）
+  // 需通过修改sstatus寄存器的SIE位实现
+    uint64 sstatus = r_sstatus();
+    sstatus |= SSTATUS_SIE;  // 开启S-mode中断总开关
+    w_sstatus(sstatus);
 
     // 系统时钟创建
     timer_create();
@@ -157,6 +164,7 @@ void external_interrupt_handler()
     if (irq == UART_IRQ)  // UART_IRQ需与硬件匹配（如QEMU中为10）
     {
         uart_intr();  // 处理UART中断（回显字符）
+        plic_complete(irq);  // 新增：通知PLIC中断处理完成
     }
     // 其他外设中断（避免irq=0的无效调用）
     else if (irq != 0)
@@ -176,5 +184,9 @@ void timer_interrupt_handler()
     // 清除 SSIP bit (S-mode software interrupt pending)
     // 宣布 S-mode 软件中断处理完成
     // 在 trap.S 里面有对应的两条命令, 去找找对应 trap.S 中的 "li a1, 2" 和 "csrw sip, a1"
-    w_sip(r_sip() & ~2);
+    //w_sip(r_sip() & ~2);
+    uint64 sip = r_sip();
+    if (sip & (1 << 1)) {  // 判断 SSIP 位是否置位
+        w_sip(sip & ~(1 << 1));  // 仅在置位时清除
+    }
 }

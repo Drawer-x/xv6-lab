@@ -37,7 +37,7 @@ void start()
     uint64 status = r_mstatus();
     status &= ~MSTATUS_MPP_MASK;  // 清除原有特权级（MPP：Previous Privilege Mode）
     status |= MSTATUS_MPP_S;      // 设置上一个特权级为S-mode
-    //status |= MSTATUS_MIE;        // 开启M-mode全局中断（否则时钟中断不触发）
+    status |= MSTATUS_MIE; //1.3
     w_mstatus(status);
 
     // 6. 设置M-mode的返回地址（mepc）：指向S-mode的入口函数main()

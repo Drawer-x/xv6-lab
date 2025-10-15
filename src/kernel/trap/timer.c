@@ -9,23 +9,24 @@
 extern void timer_vector();
 
 // 每个CPU在时钟中断中需要的临时空间
-static uint64 mscratch[NCPU][5];
+static uint64 mscratch[NCPU][5] = {0};
 
 // timer.c - 正常的timer_init函数
 void timer_init()
 {
     // 获取当前cpuid
     int hartid = r_tp();
-
+    printf("timer_init: hartid=%d, mscratch[hartid]=%p\n", 
+           hartid, &mscratch[hartid]);
     // 设置初始值 cmp_time = cur_time + time_interval
     *(uint64*)CLINT_MTIMECMP(hartid) = *(uint64*)CLINT_MTIME + INTERVAL;
 
     // cur_mscratch 指向当前CPU的mscratch数组
     volatile uint64* cur_mscratch = mscratch[hartid];
 
-    if (cur_mscratch == 0) {
-        return;
-    }
+    //if (cur_mscratch == 0) {
+    //    return;
+    //}
 
     // cur_mscratch[1] [2] [3]先空着, 在trap.S里使用
     cur_mscratch[3] = CLINT_MTIMECMP(hartid); // cmp_time
@@ -33,7 +34,8 @@ void timer_init()
 
     // 存放到临时寄存器, 便于与trap.S中的timer_vector协作
     w_mscratch((uint64)cur_mscratch);
-
+    printf("timer_init: hartid=%d, w_mscratch=%p\n", 
+           hartid, (void*)cur_mscratch);
     // 设置 M-mode 中断处理函数
     w_mtvec((uint64)timer_vector);
 

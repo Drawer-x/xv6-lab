@@ -10,7 +10,7 @@ int main()
 {
     int cpuid = r_tp();
     printf("CPU%d: booting\n", cpuid);
-
+    timer_init();  // 移到这里，确保所有核心启动后都初始化定时器
     if (cpuid == 0) {
         printf("=== Starting OS initialization ===\n");
         trap_kernel_init();
