@@ -3,6 +3,7 @@
 #include "../lock/method.h"
 #include "../arch/method.h" 
 #include "../lib/mod.h"
+#include <stdint.h>  // 定义 uint64_t 等标准整数类型
 /*-------------------- 工作在M-mode --------------------*/
 
 // in trap.S M-mode时钟中断处理流程()
@@ -34,8 +35,18 @@ void timer_init()
 
     // 存放到临时寄存器, 便于与trap.S中的timer_vector协作
     w_mscratch((uint64)cur_mscratch);
-    printf("timer_init: hartid=%d, w_mscratch=%p\n", 
-           hartid, (void*)cur_mscratch);
+    // 【新增日志】验证绑定结果（读取寄存器确认）
+    uint64_t mscratch_val = r_mscratch();  // 读取mscratch寄存器值
+    printf("[timer_init] hartid=%d: mscratch register = %p (expected %p)\n",
+           hartid, (void*)mscratch_val, (void*)cur_mscratch);
+
+    // 【新增验证】若绑定失败，强制报错（便于调试）
+    if (mscratch_val != (uint64_t)cur_mscratch) {
+        printf("[ERROR] hartid=%d: mscratch绑定失败！实际=%p 预期=%p\n",
+               hartid, (void*)mscratch_val, (void*)cur_mscratch);
+        // 触发断点（供GDB捕获）
+        asm volatile("ebreak");
+    }
     // 设置 M-mode 中断处理函数
     w_mtvec((uint64)timer_vector);
 
