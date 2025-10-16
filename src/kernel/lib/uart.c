@@ -59,33 +59,25 @@ int uart_getc_sync(void)
 		return -1;
 }
 
-// 中断处理(键盘输入->屏幕输出)
 void uart_intr(void)
 {
-    while (1)
+    // 读取 ISR 清除 UART 硬件中断标志
+    ReadReg(ISR);
+
+    // 读取 LSR 寄存器，检查接收 FIFO 是否有数据
+    while ((ReadReg(LSR) & LSR_RX_READY) != 0)
     {
         int c = uart_getc_sync();
-        if (c == -1) // 无更多输入，退出循环
-            break;
+        if (c == -1) break;
 
-        // 1. 处理换行：将 Windows 风格的 \r（回车）转为 Unix 风格的 \n（换行）
-        // 原因：键盘按下 Enter 键时，部分终端发送 \r，需转为 \n 才会换行显示
-        if (c == '\r')
-        {
-            uart_putc_sync('\n'); // 输出 \n 实现换行
-        }
-        // 2. 处理退格：支持 Backspace（\b，ASCII 8）和 Delete（127，ASCII 127）
-        // 退格逻辑：光标回退(\b) → 输出空格覆盖原字符 → 光标再次回退(\b)
+        // 原有字符处理逻辑（换行、退格、回显）
+        if (c == '\r') uart_putc_sync('\n');
         else if (c == '\b' || c == 127)
         {
-            uart_putc_sync('\b');  // 第一步：光标左移1位
-            uart_putc_sync(' ');   // 第二步：用空格覆盖原字符（清除显示）
-            uart_putc_sync('\b');  // 第三步：光标再左移1位（准备输入新字符）
+            uart_putc_sync('\b');
+            uart_putc_sync(' ');
+            uart_putc_sync('\b');
         }
-        // 3. 普通字符：直接回显（如字母、数字、符号等）
-        else
-        {
-            uart_putc_sync(c);
-        }
+        else uart_putc_sync(c);
     }
 }
