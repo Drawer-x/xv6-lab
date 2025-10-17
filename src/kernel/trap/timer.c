@@ -38,66 +38,125 @@ void timer_init()
 
     // 打开 M-mode 时钟中断分开关
     w_mie(r_mie() | MIE_MTIE);
-    printf("[DEBUG] timer_init done for cpu%d\n", r_tp());
+    //printf("[DEBUG] timer_init done for cpu%d\n", r_tp());
 
 }
 
 /*--------------------- 工作在S-mode --------------------*/
 
 // 全局系统时钟
-static timer_t sys_timer;
+static timer_t sys_timer[NCPU];
 
-// 时钟创建
+static struct {
+    spinlock_t lk;
+    uint64 total_ticks;  // 所有CPU的"di da"总和
+} sys_total_timer;
+
 void timer_create()
 {
-    // 关键：仅 CPU0 执行定时器初始化，CPU1 直接返回
-    if (r_tp() != 0) {
-        printf("[DEBUG] timer_create: CPU1 skip (only CPU0 init)\n");
-        return;
+    int cpuid = r_tp();  // 获取当前CPU ID
+
+    // 每个CPU初始化自己的锁和计数
+    spinlock_init(&sys_timer[cpuid].lk, "sys_timer");
+    sys_timer[cpuid].ticks = 0;
+    // 仅CPU0初始化全局总计数器（避免重复初始化）
+    if (cpuid == 0) {
+        spinlock_init(&sys_total_timer.lk, "sys_total_timer");
+        sys_total_timer.total_ticks = 0;
     }
-
-    // 仅 CPU0 初始化锁和计数
-    spinlock_init(&sys_timer.lk, "sys_timer");
-    sys_timer.ticks = 0;
-    timer_update();  // CPU0 调用，配置首次 mtimecmp
-    printf("[DEBUG] timer_init: done (CPU%d)\n", r_tp());  // 此时仅 CPU0 打印
+    //timer_update();  // 每个CPU配置自己的首次mtimecmp
+    // printf("[DEBUG] timer_init: done (CPU%d)\n", cpuid);
 }
-
 void timer_update()
 {
-    printf("Enter timer_update\n"); 
+    //printf("Enter timer_update (CPU%d)\n", r_tp()); 
     int cpuid = r_tp();
 
-    // 关键：仅 CPU0 处理锁和计数（避免多 CPU 锁竞争）
-    if (cpuid == 0) {
-        // 加锁前先检查锁状态（可选，调试用）
-        if (spinlock_holding(&sys_timer.lk)) {
-            printf("[DEBUG] CPU%d: already holding timer lock\n", cpuid);
-        } else {
-            spinlock_acquire(&sys_timer.lk);  // 仅 CPU0 加锁
-            sys_timer.ticks++;
-            // 修复格式化字符串：用 %d 替代 %llu（若 printf 不支持 64 位格式）
-            printf("cpu %d:di da (total ticks: %d)\n", cpuid, (int)sys_timer.ticks);
-            spinlock_release(&sys_timer.lk);  // 仅加锁的 CPU0 释放锁
-        }
-    }
+    // 更新当前CPU的计数
+    spinlock_acquire(&sys_timer[cpuid].lk);
+    sys_timer[cpuid].ticks++;
+    //printf("cpu %d:di da (total ticks: %d) | 全局总计数: %d\n", 
+    //       cpuid, 
+    //       (int)sys_timer[cpuid].ticks, 
+    //       (int)sys_total_timer.total_ticks + 1);  // 提前+1显示最新值
+    spinlock_release(&sys_timer[cpuid].lk);
 
-    // 配置 mtimecmp（仅 CPU0 负责，与之前一致）
-    if (cpuid == 0) {
-        volatile uint64_t *mtime = (volatile uint64_t *)CLINT_MTIME;
-        volatile uint64_t *mtimecmp = (volatile uint64_t *)CLINT_MTIMECMP(cpuid);
-        *mtimecmp = *mtime + INTERVAL;
-        // 修复格式化字符串
-        printf("[DEBUG] CPU0: mtime=%d, next mtimecmp=%d\n", (int)*mtime, (int)*mtimecmp);
-    }
+    // 累加全局总计数（所有CPU共享，需加锁）
+    spinlock_acquire(&sys_total_timer.lk);
+    sys_total_timer.total_ticks++;  // 每次"di da"都+1
+    spinlock_release(&sys_total_timer.lk);
+
+    // 更新当前CPU的mtimecmp（保持不变）
+    volatile uint64_t *mtime = (volatile uint64_t *)CLINT_MTIME;
+    volatile uint64_t *mtimecmp = (volatile uint64_t *)CLINT_MTIMECMP(cpuid);
+    *mtimecmp = *mtime + INTERVAL;
 }
+// // 时钟创建
+// void timer_create()
+// {
+//     // 关键：仅 CPU0 执行定时器初始化，CPU1 直接返回
+//     if (r_tp() != 0) {
+//         //printf("[DEBUG] timer_create: CPU1 skip (only CPU0 init)\n");
+//         return;
+//     }
+
+//     // 仅 CPU0 初始化锁和计数
+//     spinlock_init(&sys_timer.lk, "sys_timer");
+//     sys_timer.ticks = 0;
+//     timer_update();  // CPU0 调用，配置首次 mtimecmp
+//     //printf("[DEBUG] timer_init: done (CPU%d)\n", r_tp());  // 此时仅 CPU0 打印
+// }
+
+// void timer_update()
+// {
+//     printf("Enter timer_update\n"); 
+//     int cpuid = r_tp();
+
+//     // 关键：仅 CPU0 处理锁和计数（避免多 CPU 锁竞争）
+//     if (cpuid == 0) {
+//         // 加锁前先检查锁状态（可选，调试用）
+//         if (spinlock_holding(&sys_timer.lk)) {
+//             //printf("[DEBUG] CPU%d: already holding timer lock\n", cpuid);
+//         } else {
+//             spinlock_acquire(&sys_timer.lk);  // 仅 CPU0 加锁
+//             sys_timer.ticks++;
+//             // 修复格式化字符串：用 %d 替代 %llu（若 printf 不支持 64 位格式）
+//             printf("cpu %d:di da (total ticks: %d)\n", cpuid, (int)sys_timer.ticks);
+//             spinlock_release(&sys_timer.lk);  // 仅加锁的 CPU0 释放锁
+//         }
+//     }
+
+//     // 配置 mtimecmp（仅 CPU0 负责，与之前一致）
+//     if (cpuid == 0) {
+//         volatile uint64_t *mtime = (volatile uint64_t *)CLINT_MTIME;
+//         volatile uint64_t *mtimecmp = (volatile uint64_t *)CLINT_MTIMECMP(cpuid);
+//         *mtimecmp = *mtime + INTERVAL;
+//         // 修复格式化字符串
+//         //printf("[DEBUG] CPU0: mtime=%d, next mtimecmp=%d\n", (int)*mtime, (int)*mtimecmp);
+//     }
+// }
 
 // 获取滴答数量 (不把sys_timer暴露出去, 只提供安全的访问接口)
+// uint64 timer_get_ticks()
+// {
+//     uint64 ticks; 
+//     spinlock_acquire(&sys_timer.lk);
+//     ticks = sys_timer.ticks; 
+//     spinlock_release(&sys_timer.lk);
+//     return ticks;
+// }
+// 获取所有CPU的总滴答数（汇总值）
 uint64 timer_get_ticks()
 {
-    uint64 ticks; 
-    spinlock_acquire(&sys_timer.lk);
-    ticks = sys_timer.ticks; 
-    spinlock_release(&sys_timer.lk);
-    return ticks;
+    uint64 total = 0;
+    // 遍历所有CPU，累加各自的ticks
+    // for (int i = 0; i < NCPU; i++) {
+    //     spinlock_acquire(&sys_timer[i].lk);
+    //     total += sys_timer[i].ticks;
+    //     spinlock_release(&sys_timer[i].lk);
+    // }
+    spinlock_acquire(&sys_total_timer.lk);
+    total = sys_total_timer.total_ticks;
+    spinlock_release(&sys_total_timer.lk);
+    return total;
 }
