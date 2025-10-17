@@ -25,7 +25,7 @@ UART作为核心外设，需支持中断驱动的输入输出，并实现基本�
   1. **PLIC初始化**：`plic_init()`设置外设中断优先级，`plic_inithart()`将中断路由至当前CPU；  
   2. **中断识别**：在`external_interrupt_handler()`中，通过`plic_claim()`获取中断源ID，判断是否为UART中断；  
   3. **中断处理与确认**：若为UART中断，调用`uart_intr()`处理输入，完成后通过`plic_complete()`告知PLIC中断已处理。
-
+![text3](pictures/lab3/lab3_text3.png)
 
 ## 3. 时钟中断处理(timer.c)
 
@@ -46,7 +46,7 @@ UART作为核心外设，需支持中断驱动的输入输出，并实现基本�
   - `timer_update()`：更新计数时，通过自旋锁保护多核共享的总计数器（`sys_total_timer`），同时维护每个CPU的本地计数器（`sys_timer`），避免并发冲突；  
   - `timer_get_ticks()`：提供线程安全的总计数查询接口，通过加锁确保读取准确性；  
   - `timer_interrupt_handler()`：响应S-mode软件中断，更新计数后清除`SSIP`标志，宣告处理完成。
-
+![text12](pictures/lab3/lab3_text1&2.png)
 
 ## 4. 异常处理(trap_kernel.c)
 
