@@ -7,6 +7,4 @@ target/kernel/trap/timer.o: src/kernel/trap/timer.c src/kernel/trap/mod.h \
  src/kernel/trap/../lock/../arch/mod.h \
  src/kernel/trap/../lock/../arch/method.h \
  src/kernel/trap/../lock/../lib/mod.h \
- src/kernel/trap/../lock/../lib/method.h \
- /usr/lib/gcc-cross/riscv64-linux-gnu/11/include/stdint.h \
- /usr/lib/gcc-cross/riscv64-linux-gnu/11/include/stdint-gcc.h
+ src/kernel/trap/../lock/../lib/method.h
