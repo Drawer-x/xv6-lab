@@ -1,5 +1,5 @@
 #pragma once
-
+#include "type.h"
 /* pmem.c: 物理内存管理逻辑 */
 
 void pmem_init(void);

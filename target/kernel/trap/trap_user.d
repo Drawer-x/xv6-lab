@@ -1,4 +1,4 @@
-target/kernel/trap/trap_kernel.o: src/kernel/trap/trap_kernel.c \
+target/kernel/trap/trap_user.o: src/kernel/trap/trap_user.c \
  src/kernel/trap/mod.h src/kernel/trap/type.h \
  src/kernel/trap/../lib/type.h src/kernel/trap/../lib/../arch/type.h \
  src/kernel/trap/../lib/../proc/type.h \
@@ -8,4 +8,6 @@ target/kernel/trap/trap_kernel.o: src/kernel/trap/trap_kernel.c \
  src/kernel/trap/../lock/../arch/mod.h \
  src/kernel/trap/../lock/../arch/method.h \
  src/kernel/trap/../lock/../lib/mod.h \
- src/kernel/trap/../lock/../lib/method.h
+ src/kernel/trap/../lock/../lib/method.h src/kernel/trap/../mem/method.h \
+ src/kernel/trap/../mem/type.h src/kernel/trap/../proc/method.h \
+ src/kernel/trap/../../user/syscall_num.h

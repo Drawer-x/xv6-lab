@@ -1,44 +1,58 @@
-OUTPUT_ARCH( "riscv" )
-ENTRY( _entry )
+OUTPUT_ARCH(riscv)
+ENTRY(_start)
+
+/*
+ * ECNU-OSLAB-2025 kernel.ld
+ * - 支持 kvm.c 所需符号
+ * - 修复 syntax error（移除 16M 写法）
+ */
 
 SECTIONS
 {
+  /* ---------------- 内核加载基地址 ---------------- */
   . = 0x80000000;
 
+  /* ---------------- 代码段 (.text) ---------------- */
+  _stext = .;
   .text : {
     *(.text .text.*)
-    . = ALIGN(0x1000);
-
-    _trampoline = .;
-    *(trampsec)
-    . = ALIGN(0x1000);
-    ASSERT(. - _trampoline == 0x1000, "error: trampoline larger than one page");
-
-    PROVIDE(KERNEL_DATA = .);
   }
+  _etext = .;
 
+  /* ---------------- 只读数据 (.rodata) ---------------- */
   .rodata : {
-    . = ALIGN(16);
-    *(.srodata .srodata.*) /* do not need to distinguish this from .rodata */
-    . = ALIGN(16);
     *(.rodata .rodata.*)
   }
 
+  /* ---------------- 已初始化数据 (.data) ---------------- */
+  _sdata = .;
   .data : {
-    . = ALIGN(16);
-    *(.sdata .sdata.*) /* do not need to distinguish this from .data */
-    . = ALIGN(16);
     *(.data .data.*)
   }
+  _edata = .;
 
+  /* ---------------- 未初始化数据 (.bss) ---------------- */
+  _sbss = .;
   .bss : {
-    . = ALIGN(16);
-    *(.sbss .sbss.*) /* do not need to distinguish this from .bss */
-    . = ALIGN(16);
     *(.bss .bss.*)
+    *(COMMON)
   }
+  _ebss = .;
 
-  . = ALIGN(4096);
+  /* ---------------- 可分配物理内存区 ---------------- */
+  . = ALIGN(0x1000);
   PROVIDE(ALLOC_BEGIN = .);
-  PROVIDE(ALLOC_END = 0x80000000 + 128M);
+  . += 0x1000000;   /* 16MB */
+  PROVIDE(ALLOC_END = .);
+
+  /* ---------------- trampoline ---------------- */
+  . = ALIGN(0x1000);
+  trampoline = .;
+  KEEP(*(.trampoline))
+
+  /* ---------------- 丢弃无关段 ---------------- */
+  /DISCARD/ : {
+    *(.eh_frame)
+    *(.comment)
+  }
 }

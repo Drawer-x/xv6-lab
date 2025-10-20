@@ -1,7 +1,12 @@
 #include "mod.h"
+#include "method.h"
 #include "../mem/method.h"
+#include "../mem/type.h"
 #include "../lib/method.h"
-#include "../../user/initcode.h"   // target_user_initcode / len
+#include "../lib/type.h"
+#include "../../user/initcode.h"
+
+
 // trampoline & user-vector（在汇编里）
 extern char trampoline[];
 extern char user_vector[];
@@ -11,8 +16,6 @@ extern void user_return(trapframe_t *tf, uint64 satp);
 // ========== 本文件仅使用你仓库里已有的常量/函数/结构 ==========
 
 // 一些CSR小工具（只在本文件内部使用）
-static inline uint64 r_satp() { uint64 x; asm volatile("csrr %0, satp" : "=r"(x)); return x; }
-static inline uint64 r_tp()   { uint64 x; asm volatile("mv %0, tp"     : "=r"(x)); return x; }
 
 // ---- 进程0的用户空间布局（按实验约定可在此处配置）----
 // 若你的 README/脚本对用户地址另有明确要求，改成相应值即可。
@@ -81,11 +84,11 @@ void proc_make_first()
     proczero.pgtbl = proc_pgtbl_init((uint64)proczero.tf);
 
     // 3) 装载 initcode 到用户地址空间（1页）
-    assert(target_user_initcode_len <= PGSIZE, "initcode too large (>1 page)");
+    assert(src_user_initcode_bin_len <= PGSIZE, "initcode too large (>1 page)");
     void *ucode_page = pmem_alloc(false);
     assert(ucode_page != NULL, "proc_make_first: ucode alloc failed");
     memset(ucode_page, 0, PGSIZE);
-    memmove(ucode_page, target_user_initcode, (uint32)target_user_initcode_len);
+    memmove(ucode_page, src_user_initcode_bin, (uint32)src_user_initcode_bin_len);
     vm_mappages(proczero.pgtbl, PROC0_UCODE_VA, (uint64)ucode_page, PGSIZE, PTE_R | PTE_X | PTE_U);
 
     // 4) 分配并映射用户栈（向上生长，sp 初值为 TOP）
