@@ -43,7 +43,7 @@ OBJ    := $(patsubst src/%.c, $(TARGET_DIR)/%.o, $(C_SRC)) \
 all: $(KERNEL_ELF)
 
 run: $(KERNEL_ELF)
-	qemu-system-riscv64 -machine virt -kernel $(KERNEL_ELF) -nographic
+	qemu-system-riscv64 -machine virt -bios none -kernel target/kernel-qemu.elf -nographic -serial mon:stdio
 
 qemu: run
 
@@ -54,8 +54,12 @@ qemu: run
 # 生成 kernel ELF
 $(KERNEL_ELF): $(OBJ)
 	@mkdir -p $(dir $@)
-	$(LD) -o $@ $^ $(LDFLAGS)
+	$(LD) -o $@ \
+		target/kernel/boot/entry.o \
+		$(filter-out target/kernel/boot/entry.o,$^) \
+		$(LDFLAGS)
 	@echo "[LD]  -> $@"
+
 
 # C 源文件
 $(TARGET_DIR)/%.o: src/%.c $(INITCODE_H)

@@ -1,0 +1,56 @@
+OUTPUT_ARCH(riscv)
+ENTRY(_entry)
+
+/*
+ * ECNU-OSLAB-2025 kernel.ld
+ * Clean version without BOM or invisible Unicode
+ */
+
+SECTIONS
+{
+  /* ----------------  ---------------- */
+  . = 0x80200000;
+
+  /* ----------------  (.text) ---------------- */
+  PROVIDE(_stext = .);
+  .text : {
+    *(.text .text.*)
+  }
+  PROVIDE(_etext = .);
+
+  /* ----------------  (.rodata) ---------------- */
+  .rodata : {
+    *(.rodata .rodata.*)
+  }
+
+  /* ----------------  (.data) ---------------- */
+  PROVIDE(_sdata = .);
+  .data : {
+    *(.data .data.*)
+  }
+  PROVIDE(_edata = .);
+
+  /* ----------------  (.bss) ---------------- */
+  _sbss = .;
+  .bss : {
+    *(.bss .bss.*)
+    *(COMMON)
+  }
+  _ebss = .;
+
+  /* ----------------  ---------------- */
+  . = ALIGN(0x1000);
+  PROVIDE(ALLOC_BEGIN = .);
+  . += 0x01000000;   /* 16MB */
+  PROVIDE(ALLOC_END = .);
+
+  /* ---------------- trampoline ---------------- */
+  . = ALIGN(0x1000);
+  PROVIDE(trampoline = .);
+  
+  /* ----------------  ---------------- */
+  /DISCARD/ : {
+    *(.eh_frame)
+    *(.comment)
+  }
+}

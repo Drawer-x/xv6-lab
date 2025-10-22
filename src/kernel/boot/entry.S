@@ -1,20 +1,33 @@
-# kernel.ld 将 _entry 作为整个OS的起点放置到0x80000000处
-# qemu会自动跳转到0x80000000处并开始执行
-# 注意: 此时是M-mode
+# ==========================================
+# _entry.S — QEMU 启动验证用 UART 输出程序
+# ==========================================
+# 功能：
+#   1. 从 QEMU 加载后立即运行（位于 0x80200000）
+#   2. 向 UART (0x10000000) 连续输出字符串 "HELLO!\n"
+#   3. 进入死循环，防止 QEMU 退出
+# ==========================================
 
 .section .text
-.global _entry
+.globl _entry
 _entry:
-    # CPU_stack 定义于start.c中
-    # sp = CPU_stack + ((hartid + 1) * 4096)
-    # 将sp置于当前CPU的内核栈的栈顶
-    la sp, CPU_stack
-    li a0, 4096
-    csrr a1, mhartid
-    addi a1, a1, 1
-    mul a0, a0, a1
-    add sp, sp, a0
-    # 跳转到start
-    call start
-spin:
-    j spin
+    # UART MMIO 基地址
+    li t0, 0x10000000
+
+print_loop:
+    # 打印字符串
+    la t1, message
+print_char:
+    lbu t2, 0(t1)          # 取当前字符
+    beqz t2, done          # 若为 0，结束
+    sb t2, 0(t0)           # 写入 UART 寄存器
+    addi t1, t1, 1         # 指向下一个字符
+    j print_char
+
+done:
+    # 死循环防止退出
+    j done
+
+# 数据区 — 要打印的字符串
+.section .rodata
+message:
+    .string "HELLO!\n"

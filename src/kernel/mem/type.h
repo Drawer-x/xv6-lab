@@ -40,7 +40,7 @@ typedef struct alloc_region
 */
 
 // 内核基地址
-#define KERNEL_BASE 0x80000000ul
+#define KERNEL_BASE 0x80200000ul
 
 // from kernel.ld
 extern char KERNEL_DATA[];
