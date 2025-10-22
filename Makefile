@@ -20,7 +20,7 @@ CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb -gdwarf-2 \
          -MD -mcmodel=medany -ffreestanding -fno-common -nostdlib \
          -mno-relax -I. -fno-stack-protector -fno-pie -no-pie
 
-LDFLAGS = -T kernel.ld -nostdlib -no-pie
+LDFLAGS = -T kernel.ld -nostdlib -no-pie -v
 
 # 目标文件
 KERNEL_ELF = $(TARGET_DIR)/kernel-qemu.elf
@@ -73,7 +73,6 @@ $(TARGET_DIR)/%.o: src/%.S
 # user/initcode 构建规则
 # ================================================================
 
-# 1. 编译 initcode.c -> initcode.elf
 # 1. 编译 initcode.c -> initcode.elf
 $(INITCODE_ELF): $(USER_DIR)/initcode.c $(USER_DIR)/initcode.ld
 	$(CC) -nostdlib -nostartfiles -Wl,--build-id=none -T $(USER_DIR)/initcode.ld -o $@ $<

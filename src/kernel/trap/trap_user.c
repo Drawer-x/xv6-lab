@@ -1,7 +1,7 @@
 #include "mod.h"
 #include "../lib/method.h"
 #include "../mem/method.h"
-#include "../mem/type.h"      // ✅ 使宏 MAKE_SATP 可见
+#include "../mem/type.h"      // 引入 MAKE_SATP
 #include "../proc/method.h"
 #include "../proc/type.h"
 #include "../../user/syscall_num.h"
@@ -28,8 +28,8 @@ void trap_user_handler()
 
     if (!is_intr) {
         // ---- 异常 ----
-        if (code == 8) { // ecall from U
-            uint64 num = tf->a7; // syscall 编号在 a7
+        if (code == 8) { // ecall from U (系统调用)
+            uint64 num = tf->a7; // 系统调用号存放在 a7
             switch (num) {
                 case SYS_helloworld:
                     printf("proczero: hello world\n");
@@ -55,7 +55,7 @@ void trap_user_handler()
     w_stvec((uint64)user_vector);
     w_sscratch((uint64)tf);
 
-    // ✅ 使用宏 MAKE_SATP
+    // 使用宏 MAKE_SATP 返回到用户态
     user_return(tf, MAKE_SATP(p->pgtbl));
     __builtin_unreachable();
 }
