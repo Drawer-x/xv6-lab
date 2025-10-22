@@ -1,33 +1,52 @@
 OUTPUT_ARCH(riscv)
-ENTRY(_start)
+ENTRY(_entry)
 
 SECTIONS
 {
+  /* Kernel is loaded at 0x80000000 on QEMU virt */
   . = 0x80000000;
-  _start = .;
 
+  /* -------- text -------- */
   _stext = .;
-  .text : { *(.text .text.*) }
+  .text : {
+    *(.text .text.*)
+  }
   _etext = .;
 
-  .rodata : { *(.rodata .rodata.*) }
+  /* -------- rodata -------- */
+  .rodata : {
+    *(.rodata .rodata.*)
+  }
 
+  /* -------- data -------- */
   _sdata = .;
-  .data : { *(.data .data.*) }
+  .data : {
+    *(.data .data.*)
+  }
   _edata = .;
 
+  /* -------- bss -------- */
   _sbss = .;
-  .bss : { *(.bss .bss.*) *(COMMON) }
+  .bss : {
+    *(.bss .bss.*)
+    *(COMMON)
+  }
   _ebss = .;
 
+  /* -------- allocatable physical memory -------- */
   . = ALIGN(0x1000);
   PROVIDE(ALLOC_BEGIN = .);
-  . += 0x01000000;   /* 16MB */
+  . += 0x01000000; /* 16MB */
   PROVIDE(ALLOC_END = .);
 
+  /* -------- trampoline -------- */
   . = ALIGN(0x1000);
   trampoline = .;
-  KEEP(*(.trampoline))
+  KEEP(*(.trampoline));
 
-  /DISCARD/ : { *(.eh_frame) *(.comment) }
+  /* -------- discard unnecessary sections -------- */
+  /DISCARD/ : {
+    *(.eh_frame)
+    *(.comment)
+  }
 }
