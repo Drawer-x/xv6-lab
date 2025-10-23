@@ -4,7 +4,7 @@ ENTRY(_entry)
 SECTIONS
 {
   /* 内核基址（OpenSBI 模式） */
-  . = 0x80200000;
+  . = 0x80000000;
 
   /* -------- text -------- */
   PROVIDE(_stext = .);
