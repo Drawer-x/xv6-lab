@@ -126,6 +126,12 @@ void proc_make_first()
     // 8) 切换到 proczero
     cpu_t *c = mycpu();
     c->proc = &proczero;
+
+    printf("[proc] switch to user: epc=0x%lx, usp=0x%lx, ksp=0x%lx\n",
+       proczero.tf->user_to_kern_epc,   // 预期 0x1000
+       proczero.tf->sp,                 // 用户栈顶
+       proczero.kstack + PGSIZE);       // 内核栈顶
+
     swtch(&c->ctx, &proczero.ctx);
 
     // swtch 返回到这里时，说明 proczero 让出了CPU（本实验阶段通常不会回来）

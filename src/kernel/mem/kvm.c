@@ -90,7 +90,7 @@ void kvm_init()
     // 来自 kernel.ld 的段边界符号
     extern char _stext[], _etext[];            // .text
     extern char _srodata[], _erodata[];        // .rodata  <-- 新增
-    extern char _sdata[], _edata[];            // .data .. .bss（连续映射）
+    extern char _sdata[], _ebss[];   // 注意 _ebss（不是 _edata）
     extern char ALLOC_BEGIN[], ALLOC_END[];    // 可分配物理内存区
     extern char trampoline[];                  // .trampoline 段起点（单页）
 
@@ -109,7 +109,7 @@ void kvm_init()
     // 3) .data + .bss ：RW
     vm_mappages(kernel_pgtbl,
                 (uint64)_sdata, (uint64)_sdata,
-                (uint64)(_edata - _sdata),
+                (uint64)(_ebss - _sdata),
                 PTE_R | PTE_W);
 
     // 4) 可分配区域（恒等映射）：RW
@@ -139,7 +139,8 @@ void kvm_init()
 #endif
 
     printf("[kvm_init] kernel_pgtbl ready. text[%p,%p) rodata[%p,%p) data..bss[%p,%p) tramp[%p]\n",
-           _stext, _etext, _srodata, _erodata, _sdata, _edata, trampoline);
+       _stext, _etext, _srodata, _erodata, _sdata, _ebss, trampoline);
+
 }
 
 void kvm_inithart()

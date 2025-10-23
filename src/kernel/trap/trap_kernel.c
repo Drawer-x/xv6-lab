@@ -1,11 +1,11 @@
 #include "mod.h"
-#include "../lock/type.h"  
+#include "../lock/type.h"
 #include "../lock/method.h"
-#include "../arch/method.h" 
+#include "../arch/method.h"
 #include "../lib/mod.h"
 
-// 中断信息
-static char *interrupt_info[16] = {
+// 中断信息（仅用于报错时打印）
+static const char *interrupt_info[16] = {
     "U-mode software interrupt",      // 0
     "S-mode software interrupt",      // 1
     "reserved-1",                     // 2
@@ -24,8 +24,7 @@ static char *interrupt_info[16] = {
     "reserved-7",                     // 15
 };
 
-// 异常信息
-static char *exception_info[16] = {
+static const char *exception_info[16] = {
     "Instruction address misaligned", // 0
     "Instruction access fault",       // 1
     "Illegal instruction",            // 2
@@ -44,143 +43,146 @@ static char *exception_info[16] = {
     "Store/AMO page fault",           // 15
 };
 
-// 实现位于 trap.S
-// 它是完整的内核态trap处理流程
-extern void kernel_vector();
+// trap.S 中的内核态向量入口
+extern void kernel_vector(void);
 
-// 初始化trap中各个核心共享的东西
-void trap_kernel_init()
+// 供 handler 使用的外设/时钟中断处理函数
+void external_interrupt_handler(void);
+void timer_interrupt_handler(void);
+
+// 共享初始化（一次性）
+void trap_kernel_init(void)
 {
-    uart_init();  
-    // PLIC初始化
-    plic_init();
-    // 系统时钟创建
-    timer_create();
+    uart_init();     // 早期串口可用
+    plic_init();     // PLIC 全局初始化
+    timer_create();  // 创建/启动时钟（M 态中断转发为 SSIP）
 }
 
-// 初始化trap中各个核心独有的东西
-void trap_kernel_inithart()
+// 每核初始化（本核独有）
+void trap_kernel_inithart(void)
 {
-    // PLIC核心初始化
+    // PLIC 路由到本核
     plic_inithart();
-    // 填写内核态中断处理函数
+
+    // 将 S 态 trap 入口设为内核态向量（kernel_vector）
+    // stvec[1:0] = 0（direct 模式），我们这里不设置 vectored
     w_stvec((uint64)kernel_vector);
-    // 开启S-mode全局中断（允许CPU响应外部中断）
+
+    // 开启 S 态全局中断位
     uint64 sstatus = r_sstatus();
-    sstatus |= SSTATUS_SIE;  // 开启S-mode中断总开关,main
+    sstatus |= SSTATUS_SIE;
     w_sstatus(sstatus);
-    // 通过 sie 寄存器开启特定中断（定时器 + 外部中断）
+
+    // 开启定时器/外部/软件中断
     uint64 sie_val = r_sie();
-    sie_val |= SIE_STIE;  
-    sie_val |= SIE_SEIE;  
-    sie_val |= SIE_SSIE;  
-    w_sie(sie_val);   
+    sie_val |= SIE_STIE;  // S-mode timer interrupt enable
+    sie_val |= SIE_SEIE;  // S-mode external interrupt enable (PLIC)
+    sie_val |= SIE_SSIE;  // S-mode software interrupt enable (M->S 转发)
+    w_sie(sie_val);
+
     intr_on();
 }
 
-// 在kernel_vector()里面调用
-// 内核态trap处理的核心逻辑
-void trap_kernel_handler()
+// 由 kernel_vector() 进入
+void trap_kernel_handler(void)
 {
-    uint64 sepc = r_sepc();       // 记录了发生异常时的PC值
-    uint64 sstatus = r_sstatus(); // 与特权模式和中断相关的状态信息
-    uint64 scause = r_scause();   // 引发trap的原因
-    uint64 stval = r_stval();     // 发生trap时保存的附加信息 (不同trap类型不一样)
+    uint64 sepc    = r_sepc();     // 触发时的 PC
+    uint64 sstatus = r_sstatus();  // SPP/SIE 等
+    uint64 scause  = r_scause();   // 原因
+    uint64 stval   = r_stval();    // 附加信息
 
-    // 确认trap来自S-mode且此时trap处于关闭状态
+    // 来自 S 模式，且进入 handler 时应为关中断状态（避免嵌套）
     assert(sstatus & SSTATUS_SPP, "trap_kernel_handler: not from s-mode");
-    assert(intr_get() == 0, "trap_kernel_handler: interreput enabled");
+    assert(intr_get() == 0, "trap_kernel_handler: interrupt enabled");
 
-    int trap_id = scause & ~0x8000000000000000ul;
+    uint64 is_intr = (scause >> 63) & 1;
+    uint64 code    = scause & 0xfff;   // 原因码统一取低 12 位
 
-    if (scause & 0x8000000000000000ul) {
-        // 中断处理
-        switch (trap_id) {
-        case 1:
-            timer_interrupt_handler();
+    if (is_intr) {
+        // ===== 中断 =====
+        switch (code) {
+        case 1: // SSIP：M 态时钟通过置 SSIP 通知 S 态
+        case 5: // STIP：S 态时钟中断
+            timer_interrupt_handler(); // 内部会清除 SSIP（见 trap_kernel.c 底部）
             break;
-        case 5:
-            timer_interrupt_handler();
-            break;
-        case 9:
-            external_interrupt_handler(); 
+        case 9: // SEIP：外部中断（PLIC），其中可能是 UART
+            external_interrupt_handler();
             break;
         default:
-            printf("\nunexpected interrupt: %s\n", interrupt_info[trap_id]);
-            printf("trap_id = %d, sepc = %p, stval = %p\n", trap_id, sepc, stval);
+            printf("\nunexpected interrupt: %s\n", (code < 16 ? interrupt_info[code] : "unknown"));
+            printf("code = %lu, sepc = %p, stval = %p\n", code, sepc, stval);
             panic("trap_kernel_handler");
         }
     } else {
-        // 异常处理
-        switch (trap_id) {
-        case 0:
-        case 1:
-            printf("\n[EXCEPTION] %s\n", exception_info[trap_id]);
+        // ===== 异常 =====
+        switch (code) {
+        case 0: // Instruction address misaligned
+        case 1: // Instruction access fault
+            printf("\n[EXCEPTION] %s\n", exception_info[code]);
             printf("  sepc: %p\n", sepc);
             printf("  stval: %p\n", stval);
             panic("instruction access fault");
-        case 2:
-            printf("\n[EXCEPTION] %s\n", exception_info[trap_id]);
+
+        case 2: // Illegal instruction
+            printf("\n[EXCEPTION] %s\n", exception_info[code]);
             printf("  sepc: %p\n", sepc);
             printf("  instruction at sepc: 0x%lx\n", *(uint64*)sepc);
             panic("illegal instruction");
-        case 5:
-        case 7:
-            printf("\n[EXCEPTION] %s\n", exception_info[trap_id]);
+
+        case 5: // Load access fault
+        case 7: // Store/AMO access fault
+            printf("\n[EXCEPTION] %s\n", exception_info[code]);
             printf("  sepc: %p\n", sepc);
             printf("  stval: %p\n", stval);
             panic("memory access fault");
-        case 8:
-            printf("[SYSCALL] %s at %p\n", exception_info[trap_id], sepc);
+
+        case 8: // Environment call from U-mode（一般不期望在内核态看到）
+            printf("[SYSCALL] %s at %p\n", exception_info[code], sepc);
             w_sepc(sepc + 4);
             break;
-        case 9:
-            printf("[S-MODE ECALL] %s at %p\n", exception_info[trap_id], sepc);
+
+        case 9: // Environment call from S-mode
+            printf("[S-MODE ECALL] %s at %p\n", exception_info[code], sepc);
             w_sepc(sepc + 4);
             break;
-        case 12:
-        case 13:
-        case 15:
-            printf("[PAGE FAULT] %s at address %p\n", exception_info[trap_id], stval);
+
+        case 12: // Instruction page fault
+        case 13: // Load page fault
+        case 15: // Store/AMO page fault
+            printf("[PAGE FAULT] %s at address %p\n", exception_info[code], stval);
             printf("  sepc: %p\n", sepc);
             panic("page fault not implemented");
+
         default:
-            printf("\nunexpected exception: %s\n", exception_info[trap_id]);
-            printf("trap_id = %d, sepc = %p, stval = %p\n", trap_id, sepc, stval);
+            printf("\nunexpected exception: %s\n", (code < 16 ? exception_info[code] : "unknown"));
+            printf("code = %lu, sepc = %p, stval = %p\n", code, sepc, stval);
             panic("trap_kernel_handler");
         }
     }
-
 }
 
-// 外设中断处理 (基于PLIC，lab-3只需要识别和处理UART中断)
-void external_interrupt_handler()
+// 外设中断处理（基于 PLIC：此处识别 UART）
+void external_interrupt_handler(void)
 {
-    int irq = plic_claim();
-
-    if (irq == UART_IRQ) 
-    {
-        uart_intr();  
-        plic_complete(irq); 
-    }
-    else if (irq != 0)
-    {
+    int irq = plic_claim();  // 读取当前中断号
+    if (irq == UART_IRQ) {
+        uart_intr();
+        plic_complete(irq);  // 必须完成，否则 IRQ 会保持 pending
+    } else if (irq != 0) {
+        // 其他外设中断，先打印再 complete，避免死锁
         printf("unexpected external interrupt: irq=%d\n", irq);
-        plic_complete(irq); 
+        plic_complete(irq);
     }
 }
 
-// 时钟中断处理 (基于CLINT)
-void timer_interrupt_handler()
+// 时钟中断处理（基于 M 态定时器通过 SSIP 通知 S 态）
+// 由 timer_create() 安排周期性中断 -> S 态收到后更新 tick 并清 SSIP
+void timer_interrupt_handler(void)
 {
-    //printf("[DEBUG] Timer interrupt (CPU%d)\n", mycpuid());
-    // 由于sys_timer是共享资源, 但每个CPU都能收到时钟中断
-    // 所以只需要指定一个CPU(CPU-0)负责更新时钟
-    //if(mycpuid() == 0)
+    // 只调用一次更新（你的 lab-3 已验证过）
     timer_update();
-    //timer_update();
-    // 清除 SSIP bit (S-mode software interrupt pending)
-    // 宣布 S-mode 软件中断处理完成
-    // 在 trap.S 里面有对应的两条命令, 去找找对应 trap.S 中的 "li a1, 2" 和 "csrw sip, a1"
+
+    // 清除 S 态软件中断 pending 位（SSIP = bit 1）
+    // 在 trap.S 里也有对应写 sip 的逻辑；这里确保最终清零
     w_sip(r_sip() & ~2);
 }

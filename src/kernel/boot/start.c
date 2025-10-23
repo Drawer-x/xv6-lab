@@ -9,6 +9,9 @@ extern void main();
 
 void start()
 {
+    // 探针1：刚进入 start()
+    *(volatile unsigned char*)UART_BASE = 'S';
+
     // 1. 暂时不开启分页，使用物理地址
     w_satp(0);
 
@@ -39,6 +42,9 @@ void start()
 
     // 6. 设置M-mode的返回地址
     w_mepc((uint64)main);
+
+    // 探针2：mret 前
+    *(volatile unsigned char*)UART_BASE = 'R';
 
     // 7. 触发状态迁移：从M-mode跳转到S-mode（执行mepc指向的main()）
     asm volatile("mret");  

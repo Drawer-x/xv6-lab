@@ -24,9 +24,13 @@ SECTIONS
   .rodata : { *(.rodata .rodata.*) }
   PROVIDE(_erodata = .);
 
-  /* -------- data -------- */
+  /* ----------------  (.data) ---------------- */
+  . = ALIGN(0x1000);
   PROVIDE(_sdata = .);
-  .data : { *(.data .data.*) }
+  .data : {
+    *(.data .data.*)
+    *(.sdata .sdata.*)
+  }
   PROVIDE(_edata = .);
 
   /* -------- bss -------- */

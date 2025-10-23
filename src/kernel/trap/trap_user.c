@@ -1,7 +1,7 @@
 #include "mod.h"
 #include "../lib/method.h"
 #include "../mem/method.h"
-#include "../mem/type.h"      // 引入 MAKE_SATP
+#include "../mem/type.h"
 #include "../proc/method.h"
 #include "../proc/type.h"
 #include "../../user/syscall_num.h"
@@ -29,25 +29,24 @@ void trap_user_handler()
     if (!is_intr) {
         // ---- 异常 ----
         if (code == 8) { // ecall from U (系统调用)
-            uint64 num = tf->a7; // 系统调用号存放在 a7
+            uint64 num = tf->a7; // 系统调用号在 a7
             switch (num) {
                 case SYS_helloworld:
-                    printf("proczero: hello world\n");
+                    printf("proczero: hello world!\n");
                     break;
                 default:
                     printf("user syscall unknown: %lu\n", num);
                     break;
             }
-            // 跳过 ecall 指令，防止无限陷入
+            // 跳过 ecall 指令，防止反复陷入
             tf->user_to_kern_epc = r_sepc() + 4;
         } else {
-            // 其他异常，直接报错
             printf("user exception: scause=%lx sepc=%lx stval=%lx\n",
                    scause, r_sepc(), r_stval());
             panic("unhandled user exception");
         }
     } else {
-        // ---- 中断 ----（本实验阶段直接忽略返回）
+        // ---- 中断 ----（此阶段简单忽略，返回到触发点）
         tf->user_to_kern_epc = r_sepc();
     }
 
@@ -55,7 +54,13 @@ void trap_user_handler()
     w_stvec((uint64)user_vector);
     w_sscratch((uint64)tf);
 
-    // 使用宏 MAKE_SATP 返回到用户态
+    // 关键：确保 sret 会返回到 U 模式，并在返回后打开 S 中断
+    uint64 sstatus = r_sstatus();
+    sstatus &= ~SSTATUS_SPP;   // SPP=0 -> sret 返回到 U
+    sstatus |=  SSTATUS_SPIE;  // 置位 SPIE（返回后 SIE=1）
+    w_sstatus(sstatus);
+
+    // 切换到用户页表并 sret
     user_return(tf, MAKE_SATP(p->pgtbl));
     __builtin_unreachable();
 }
@@ -72,12 +77,18 @@ void trap_user_return()
 
     // sepc 指向用户代码入口
     w_sepc(tf->user_to_kern_epc);
-    // stvec 指向用户态陷阱入口
+    // stvec 指向用户态陷阱入口（trampoline 里的 user_vector）
     w_stvec((uint64)user_vector);
     // sscratch 保存 trapframe 地址
     w_sscratch((uint64)tf);
 
-    // ✅ 切换页表并 sret 回用户态
+    // 同样要准备好 sstatus：返回 U 态 & 允许 S 中断
+    uint64 sstatus = r_sstatus();
+    sstatus &= ~SSTATUS_SPP;
+    sstatus |=  SSTATUS_SPIE;
+    w_sstatus(sstatus);
+
+    // 切换页表并 sret 回用户态
     user_return(tf, MAKE_SATP(p->pgtbl));
     __builtin_unreachable();
 }
