@@ -64,11 +64,12 @@ user_vector:
 # 用户态 trap 处理完成后返回用户
 .globl user_return
 user_return:
-        csrw satp, a1
-        sfence.vma zero, zero
+        # a0 = tf, a1 = user_satp
 
-        ld t0, 112(a0)
-        csrw sscratch, t0 
+        # 我们此时还在内核页表 (kernel satp)，
+        # 先恢复用户寄存器到 CPU 寄存器里。
+        # 注意：sscratch 我们其实已经在 trap_user_return() 里写成 tf 了，
+        # 不必在这里再折腾它，所以可以不恢复 saved_sscratch。
 
         ld ra, 40(a0)
         ld sp, 48(a0)
@@ -79,7 +80,8 @@ user_return:
         ld t2, 88(a0)
         ld s0, 96(a0)
         ld s1, 104(a0)
-        # 若 trapframe_t 布局里保存了用户 a0，请在这里对应恢复
+        # (跳过 112(a0) 的 saved_sscratch，不用动)
+
         ld a1, 120(a0)
         ld a2, 128(a0)
         ld a3, 136(a0)
@@ -95,12 +97,21 @@ user_return:
         ld s7, 216(a0)
         ld s8, 224(a0)
         ld s9, 232(a0)
-        ld s10, 240(a0)
-        ld s11, 248(a0)
+        ld s10,240(a0)
+        ld s11,248(a0)
         ld t3, 256(a0)
         ld t4, 264(a0)
         ld t5, 272(a0)
         ld t6, 280(a0)
 
-        csrrw a0, sscratch, a0
+        # 到这里为止，CPU 里的通用寄存器（除了 a0）都已经被填成用户态应该有的值了。
+        # a0 我们目前压根没保存/恢复，这和你现在的内核逻辑是兼容的。
+
+        # 现在才切换到用户页表
+        csrw satp, a1
+        sfence.vma zero, zero
+
+        # sret 会：
+        # - 跳到 sepc（我们已经在 trap_user_return() 里写了 w_sepc(tf->user_to_kern_epc)）
+        # - 按 sstatus.SPP=0 进入 U-mode
         sret

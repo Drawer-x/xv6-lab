@@ -41,7 +41,7 @@ typedef struct trapframe
     /*  88 */ uint64 t2;
     /*  96 */ uint64 s0;
     /* 104 */ uint64 s1;
-    /* 112 */ uint64 a0;
+    /* 112 */ uint64 saved_sscratch;
     /* 120 */ uint64 a1;
     /* 128 */ uint64 a2;
     /* 136 */ uint64 a3;
