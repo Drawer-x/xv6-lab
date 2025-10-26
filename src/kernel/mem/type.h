@@ -93,7 +93,7 @@ typedef uint64 pte_t;
 typedef pte_t* pgtbl_t;
 
 // satp寄存器相关
-#define SATP_SV39 (8L << 60)                                           // MODE = SV39
+#define SATP_SV39 (8UL << 60)                                           // MODE = SV39
 #define MAKE_SATP(pagetable) (SATP_SV39 | (((uint64)pagetable) >> 12)) // 设置MODE和PPN字段
 
 // 获取虚拟地址中的虚拟页(VPN)信息 占9bit

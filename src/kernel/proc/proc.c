@@ -5,6 +5,7 @@
 #include "../lib/method.h"
 #include "../lib/type.h"
 #include "../../user/initcode.h"
+extern pgtbl_t kernel_pgtbl;
 
 
 // trampoline & user-vector（在汇编里）
@@ -113,7 +114,7 @@ void proc_make_first()
     //      tp <- user_to_kern_hartid
     //      t0 <- user_to_kern_trapvector （即 C 端 trap_user_handler 的地址）
     //      satp <- user_to_kern_satp （切回内核页表）
-    proczero.tf->user_to_kern_satp       = r_satp();                 // 当前已在内核页表
+    proczero.tf->user_to_kern_satp = MAKE_SATP(kernel_pgtbl);
     proczero.tf->user_to_kern_sp         = proczero.kstack + PGSIZE; // 进内核用的栈顶
     proczero.tf->user_to_kern_trapvector = (uint64)trap_user_handler;
     proczero.tf->user_to_kern_hartid     = r_tp();                   // “保存内核 tp”（你的注释就是这么要求的）
@@ -123,14 +124,33 @@ void proc_make_first()
     proczero.tf->user_to_kern_epc = PROC0_UCODE_VA; // 作为“初次 sepc”
     proczero.tf->sp               = PROC0_USTACK_TOP;
 
+     // map trapframe page into user pagetable (S-only access)
+    vm_mappages(
+        proczero.pgtbl,
+        (uint64)proczero.tf,
+        (uint64)proczero.tf,
+        PGSIZE,
+        PTE_R | PTE_W
+    );
+
+    // map kernel stack page into user pagetable (S-only access)
+    vm_mappages(
+        proczero.pgtbl,
+        (uint64)proczero.kstack,
+        (uint64)proczero.kstack,
+        PGSIZE,
+        PTE_R | PTE_W
+    );
+
     // 8) 切换到 proczero
     cpu_t *c = mycpu();
     c->proc = &proczero;
 
-    printf("[proc] switch to user: epc=0x%lx, usp=0x%lx, ksp=0x%lx\n",
-       proczero.tf->user_to_kern_epc,   // 预期 0x1000
-       proczero.tf->sp,                 // 用户栈顶
-       proczero.kstack + PGSIZE);       // 内核栈顶
+    printf("[proc] switch to user: epc=%p, usp=%p, ksp=%p\n",
+       (void*)proczero.tf->user_to_kern_epc,
+       (void*)proczero.tf->sp,
+       (void*)(proczero.kstack + PGSIZE));
+
 
     swtch(&c->ctx, &proczero.ctx);
 

@@ -78,7 +78,7 @@ $(TARGET_DIR)/%.o: src/%.S
 # ================================================================
 
 # 1. 编译 initcode.c -> initcode.elf
-$(INITCODE_ELF): $(USER_DIR)/initcode.c $(USER_DIR)/initcode.ld
+$(INITCODE_ELF): $(USER_DIR)/initcode.S $(USER_DIR)/initcode.ld
 	$(CC) -nostdlib -nostartfiles -Wl,--build-id=none -T $(USER_DIR)/initcode.ld -o $@ $<
 	@echo "[LD]  -> $@"
 

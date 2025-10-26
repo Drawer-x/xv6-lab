@@ -4,7 +4,9 @@
 #include "../mem/type.h"
 #include "../proc/method.h"
 #include "../proc/type.h"
+#include "../arch/method.h"      // <-- 加这个，拿 r_satp()/r_sepc()/...
 #include "../../user/syscall_num.h"
+
 
 // from trampoline.S
 extern char trampoline[];
@@ -15,133 +17,278 @@ extern void user_return(trapframe_t *tf, uint64 satp);
 extern void timer_interrupt_handler(void);
 extern void external_interrupt_handler(void);
 
-// -------------- user trap handler --------------
-// 被 trampoline 的 user_vector 跳进来后最终 jr 到这里
-// 不能直接 return，最后必须走 user_return 回到用户态
+// 小工具：打印 64-bit 十六进制
+static void printhex64(uint64 x)
+{
+    for (int i = 60; i >= 0; i -= 4) {
+        int d = (x >> i) & 0xF;
+        if (d < 10)
+            uart_putc_sync('0' + d);
+        else
+            uart_putc_sync('a' + d - 10);
+    }
+}
+
+// 打印调试状态：satp / sepc / scause / stval
+static void dump_trap_state(void)
+{
+    uint64 satp_val   = r_satp();
+    uint64 sepc_val   = r_sepc();
+    uint64 scause_val = r_scause();
+    uint64 stval_val  = r_stval();
+
+    uart_putc_sync('[');
+    uart_putc_sync('d');
+    uart_putc_sync('b');
+    uart_putc_sync('g');
+    uart_putc_sync(']');
+    uart_putc_sync(' ');
+
+    // satp=
+    uart_putc_sync('s');
+    uart_putc_sync('a');
+    uart_putc_sync('t');
+    uart_putc_sync('p');
+    uart_putc_sync('=');
+    printhex64(satp_val);
+
+    uart_putc_sync(' ');
+
+    // sepc=
+    uart_putc_sync('p');
+    uart_putc_sync('c');
+    uart_putc_sync('=');
+    printhex64(sepc_val);
+
+    uart_putc_sync(' ');
+
+    // scause=
+    uart_putc_sync('c');
+    uart_putc_sync('a');
+    uart_putc_sync('u');
+    uart_putc_sync('s');
+    uart_putc_sync('e');
+    uart_putc_sync('=');
+    printhex64(scause_val);
+
+    uart_putc_sync(' ');
+
+    // stval=
+    uart_putc_sync('v');
+    uart_putc_sync('a');
+    uart_putc_sync('l');
+    uart_putc_sync('=');
+    printhex64(stval_val);
+
+    uart_putc_sync('\n');
+}
+
+// ----------------------------------------------------------------------
+// trap_user_handler()
+// 说明：这是用户态 trap (ecall / page fault / 中断等) 回到内核后
+//       真正的C层入口。最终会再次准备返回用户态。
+// ----------------------------------------------------------------------
 void trap_user_handler(void)
 {
     proc_t *p = myproc();
     trapframe_t *tf = p->tf;
     assert(tf != NULL, "trap_user_handler: null trapframe");
 
-    // 读本次 trap 原因
-    uint64 scause = r_scause();
-    uint64 sepc   = r_sepc();
+    // 探针，表示我们从用户态trap回来了
+    *(volatile unsigned char *)UART_BASE = 'S';
+
+    // 新增：立即dump关键信息
+    dump_trap_state();
+
+    uint64 scause  = r_scause();
+    uint64 sepc    = r_sepc();
     uint64 is_intr = (scause >> 63) & 1;
     uint64 code    = scause & 0xfff;
 
-    // 小调试：内核确认我们真的进来了
-    *(volatile unsigned char *)UART_BASE = 'S';
-
     if (is_intr) {
-        // =========== 异步中断 ===========
-        // code 5 = STimer interrupt
-        // code 9 = SExternal interrupt (PLIC / UART)
-        // NOTE: 我们只是演示，不调度，不抢占，所以中断进来就简单处理下然后回去
-
+        // ========== 异步中断 (S-mode timer / external) ==========
         if (code == 5) {
             // S-mode timer interrupt
             timer_interrupt_handler();
         } else if (code == 9) {
-            // S-mode external interrupt (UART)
+            // S-mode external interrupt (PLIC / UART)
             external_interrupt_handler();
         } else {
-            printf("[usertrap] unexpected S interrupt code=%lu sepc=%lx\n",
-                   code, sepc);
+            printf("[usertrap] unexpected S interrupt code=%d\n", (int)code);
         }
 
-        // 回用户时，从同一个 sepc 继续
-        w_sepc(sepc);
+        // 回用户：从同一条PC继续执行
+        asm volatile("csrw sepc, %0" :: "r"(sepc));
 
     } else {
-        // =========== 同步异常 ===========
+        // ========== 同步异常 (例如 ecall / fault) ==========
         if (code == 8) {
-            // U-mode ecall
-            *(volatile unsigned char *)UART_BASE = 'E'; // ecall探针
+            // 用户态 ecall
+            *(volatile unsigned char *)UART_BASE = 'E';
 
-            uint64 num = tf->a7;  // 约定: a7 = syscall number
+            uint64 num = tf->a7;  // 约定：a7 = syscall number
             if (num == SYS_helloworld) {
                 printf("proczero: hello world!\n");
             } else {
                 printf("[user] unknown syscall %lu\n", num);
             }
 
-            // ecall 触发时，陷阱的 sepc 指向那条 ecall 指令
-            // 返回用户态时应当跳过它，否则会再次陷入
-            w_sepc(sepc + 4);
+            // ecall 的 sepc 指向 ecall 指令本身
+            // 返回用户时要跳过它，否则会再次陷入
+            asm volatile("csrw sepc, %0" :: "r"(sepc + 4));
 
         } else {
-            printf("[usertrap] exception: scause=%lx code=%lu sepc=%lx stval=%lx\n",
-                   scause, code, sepc, r_stval());
+            // 不是我们支持的同步异常：报错+停机
+            printf("[usertrap] unhandled sync scause=%p sepc=%p stval=%p\n",
+                   (void*)scause, (void*)sepc, (void*)r_stval());
             panic("unhandled user exception");
         }
     }
 
-    // ---- 准备 sret 回用户态 ----
+    // ===== 准备 sret 回用户态 =====
 
-    // 下一次从用户态进入内核时，trampoline 期望 sscratch 里是 tf
+    // 用户态下一次trap时，trampoline 的 user_vector 需要从 sscratch 找到 trapframe
     w_sscratch((uint64)tf);
 
-    // stvec 需要指向 user_vector (trampoline里的入口)，
-    // 这样用户态再陷入会回到 trampoline
+    // stvec 指向 trampoline 的 user_vector，
+    // 这样 U 态再次陷入会跳到 trampoline.S:user_vector
     w_stvec((uint64)user_vector);
 
-    // sstatus：
-    // - SPP=0 : sret 回到 U 模式
-    // - SPIE=1: sret 后把 SIE 置 1（允许 S 中断在将来生效）
-    uint64 sstatus = r_sstatus();
-    sstatus &= ~SSTATUS_SPP;
-    sstatus |=  SSTATUS_SPIE;
-    w_sstatus(sstatus);
+    // sstatus:
+    //  - SPP=0 : sret 后回到 U 模式
+    //  - SPIE=1: sret 后 SIE=1（允许以后打开中断）
+    uint64 sstatus2 = r_sstatus();
+    sstatus2 &= ~SSTATUS_SPP;
+    sstatus2 |=  SSTATUS_SPIE;
+    w_sstatus(sstatus2);
 
-    // >>> 关键点 <<<
-    // 我们不想在用户态立即再次被时钟/外部中断打断（现在还没实现调度）
-    // 所以这里关掉 SIE 的 STIE/SEIE/SSIE 位
-    uint64 sie = r_sie();
-    sie &= ~(SIE_STIE | SIE_SEIE | SIE_SSIE);
-    w_sie(sie);
+    // 我们目前不想在用户态就被时钟/外设中断打断（还没调度/抢占）
+    // 所以清掉 SIE 中具体中断位
+    uint64 sie2 = r_sie();
+    sie2 &= ~(SIE_STIE | SIE_SEIE | SIE_SSIE);
+    w_sie(sie2);
 
-    // 回去！
+    // 真正返回用户态：跳进 trampoline.S:user_return
+    // user_return 会恢复通用寄存器，切换到用户页表，并执行 sret
     user_return(tf, MAKE_SATP(p->pgtbl));
     __builtin_unreachable();
 }
 
-
-// -------------- first return from kernel to user --------------
-// 这是 proczero.ctx.ra 指向的函数，第一次真正下到用户态会走这里
+// ----------------------------------------------------------------------
+// trap_user_return()
+// 说明：第一次从内核“下放”到用户态时会走这里。
+//       它为 sret 准备好 sepc/sstatus/stvec/sscratch/sie，然后跳到 user_return。
+// ----------------------------------------------------------------------
 void trap_user_return(void)
 {
     proc_t *p  = myproc();
     trapframe_t *tf = p->tf;
     assert(tf != NULL, "trap_user_return: null trapframe");
 
-    // 打点：我们真的准备下用户态了
+    // 探针：准备首次进入用户态
     *(volatile unsigned char *)UART_BASE = 'R';
 
-    // sepc = 用户初始入口 (proc_make_first 里填的 user_to_kern_epc)
-    w_sepc(tf->user_to_kern_epc);
+    // --- Step 0: 彻底关掉 S-mode 中断全局开关，防止我们调试期间被外部中断打断 ---
+    // 清 sstatus.SIE
+    uint64 sstatus0 = r_sstatus();
+    sstatus0 &= ~SSTATUS_SIE;
+    w_sstatus(sstatus0);
 
-    // stvec = trampoline 的 user_vector
-    w_stvec((uint64)user_vector);
+    // 只为了 debug，一点点原始输出（不用printf，避免复杂栈/中断窗口）
+    uart_putc_sync('['); uart_putc_sync('d'); uart_putc_sync('b'); uart_putc_sync('g'); uart_putc_sync(']');
+    uart_putc_sync(' ');
+    uart_putc_sync('C'); uart_putc_sync('L'); uart_putc_sync('R'); uart_putc_sync('_'); uart_putc_sync('S'); uart_putc_sync('I'); uart_putc_sync('E');
+    uart_putc_sync('\n');
 
-    // sscratch = 指向 trapframe
+    // 1. sepc <- 用户入口PC
+    {
+        uint64 entry = tf->user_to_kern_epc;
+
+        uart_putc_sync('R'); // probe 'R' we were already printing
+        uart_putc_sync('[');
+        uart_putc_sync('d');
+        uart_putc_sync('b');
+        uart_putc_sync('g');
+        uart_putc_sync(']');
+        uart_putc_sync(' ');
+        uart_putc_sync('s'); uart_putc_sync('e'); uart_putc_sync('t'); uart_putc_sync('t'); uart_putc_sync('i'); uart_putc_sync('n'); uart_putc_sync('g'); uart_putc_sync(' ');
+        uart_putc_sync('s'); uart_putc_sync('e'); uart_putc_sync('p'); uart_putc_sync('c'); uart_putc_sync('=');
+        printhex64(entry);
+        uart_putc_sync('\n');
+
+        asm volatile("csrw sepc, %0" :: "r"(entry));
+
+        uint64 now_sepc = r_sepc();
+        uart_putc_sync('['); uart_putc_sync('d'); uart_putc_sync('b'); uart_putc_sync('g'); uart_putc_sync(']');
+        uart_putc_sync(' ');
+        uart_putc_sync('a'); uart_putc_sync('f'); uart_putc_sync('t'); uart_putc_sync('e'); uart_putc_sync('r'); uart_putc_sync(' ');
+        uart_putc_sync('w'); uart_putc_sync('r'); uart_putc_sync('i'); uart_putc_sync('t'); uart_putc_sync('e'); uart_putc_sync(' ');
+        uart_putc_sync('r'); uart_putc_sync('_'); uart_putc_sync('s'); uart_putc_sync('e'); uart_putc_sync('p'); uart_putc_sync('c'); uart_putc_sync('('); uart_putc_sync(')'); uart_putc_sync('=');
+        printhex64(now_sepc);
+        uart_putc_sync('\n');
+    }
+
+    // 2. sscratch <- trapframe 指针
+    //    这样 user_vector 里 csrrw a0, sscratch, a0 才能拿到 tf
     w_sscratch((uint64)tf);
 
-    // sstatus 设置成 “sret 会去 U, 并允许将来开中断”
-    uint64 sstatus = r_sstatus();
-    sstatus &= ~SSTATUS_SPP;   // 下一次 sret 回 U
-    sstatus |=  SSTATUS_SPIE;  // sret 后允许 SIE=1
-    w_sstatus(sstatus);
+    // 3. stvec <- user_vector
+    //    以后用户态 trap (ecall/中断) 会跳这里
+    w_stvec((uint64)user_vector);
 
-    // >>> 同样的关键点：先关 S 态的中断源位 <<<
-    uint64 sie = r_sie();
-    sie &= ~(SIE_STIE | SIE_SEIE | SIE_SSIE);
-    w_sie(sie);
+    // 4. sstatus:
+    //    - 清 SPP，表示 sret 后进入 U 模式
+    //    - 置 SPIE，表示 sret 后 SIE=1 (用户态时打开下一轮S中断)
+    {
+        uint64 sstatus_before = r_sstatus();
 
-    // 也打点一下
-    *(volatile unsigned char *)UART_BASE = 'U';
+        uart_putc_sync('['); uart_putc_sync('d'); uart_putc_sync('b'); uart_putc_sync('g'); uart_putc_sync(']');
+        uart_putc_sync(' ');
+        uart_putc_sync('s'); uart_putc_sync('s'); uart_putc_sync('t'); uart_putc_sync('a'); uart_putc_sync('t'); uart_putc_sync('u'); uart_putc_sync('s');
+        uart_putc_sync('('); uart_putc_sync('b'); uart_putc_sync('e'); uart_putc_sync('f'); uart_putc_sync('o'); uart_putc_sync('r'); uart_putc_sync('e'); uart_putc_sync(')'); uart_putc_sync('=');
+        printhex64(sstatus_before);
+        uart_putc_sync('\n');
 
-    // 切用户页表并 sret
+        uint64 sstatus_new = sstatus_before;
+        sstatus_new &= ~SSTATUS_SPP;   // sret -> U-mode
+        sstatus_new |=  SSTATUS_SPIE;  // set SPIE
+        // 注意：我们不在这里重新开 SIE，全局中断仍保持关闭直到 sret 之后
+        // (即我们不设置 SIE 位；刚才已经清掉了)
+        sstatus_new &= ~SSTATUS_SIE;   // just to be explicit: keep SIE=0 now
+        w_sstatus(sstatus_new);
+
+        uint64 sstatus_after = r_sstatus();
+        uart_putc_sync('['); uart_putc_sync('d'); uart_putc_sync('b'); uart_putc_sync('g'); uart_putc_sync(']');
+        uart_putc_sync(' ');
+        uart_putc_sync('s'); uart_putc_sync('s'); uart_putc_sync('t'); uart_putc_sync('a'); uart_putc_sync('t'); uart_putc_sync('u'); uart_putc_sync('s');
+        uart_putc_sync('('); uart_putc_sync('a'); uart_putc_sync('f'); uart_putc_sync('t'); uart_putc_sync('e'); uart_putc_sync('r'); uart_putc_sync(')'); uart_putc_sync('=');
+        printhex64(sstatus_after);
+        uart_putc_sync('\n');
+    }
+
+    // 5. 仍然把 sie 的三个子位关掉（双保险）
+    {
+        uint64 sie = r_sie();
+        sie &= ~(SIE_STIE | SIE_SEIE | SIE_SSIE);
+        w_sie(sie);
+    }
+
+    // 6. 调试：确认 stvec 和 user_vector 是一致的
+    {
+        uint64 cur_stvec = r_stvec();
+        uart_putc_sync('U'); // old probe
+        uart_putc_sync('['); uart_putc_sync('d'); uart_putc_sync('b'); uart_putc_sync('g'); uart_putc_sync(']');
+        uart_putc_sync(' ');
+        printhex64(cur_stvec);
+        uart_putc_sync(' ');
+        printhex64((uint64)user_vector);
+        uart_putc_sync('\n');
+    }
+
+    // 7. 进入 trampoline.S:user_return
+    //    a0 = tf
+    //    a1 = satp 值 (MAKE_SATP(p->pgtbl))
     user_return(tf, MAKE_SATP(p->pgtbl));
+
     __builtin_unreachable();
 }

@@ -92,14 +92,13 @@ static inline void w_mie(uint64 x)
 // 写入sepc寄存器
 static inline void w_sepc(uint64 x)
 {
-    asm volatile("csrw sepc, %0" : : "r"(x));
+    asm volatile("csrw sepc, %0" : : "r" (x));
 }
 
-// 读取sepc寄存器
 static inline uint64 r_sepc()
 {
     uint64 x;
-    asm volatile("csrr %0, sepc" : "=r"(x));
+    asm volatile("csrr %0, sepc" : "=r" (x));
     return x;
 }
 
