@@ -16,7 +16,7 @@
 
 // core-local interruptor (CLINT)
 // 接收本地中断源: 包括软件中断和时钟中断
-#define CLINT_BASE 0x2000000ul
+#define CLINT_BASE 0x02000000ul
 #define CLINT_MSIP(hart) (CLINT_BASE + 4 * (hart))
 #define CLINT_MTIMECMP(hart) (CLINT_BASE + 0x4000 + 8 * (hart))
 #define CLINT_MTIME (CLINT_BASE + 0xBFF8)

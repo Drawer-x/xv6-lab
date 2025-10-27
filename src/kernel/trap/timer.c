@@ -1,95 +1,96 @@
 #include "mod.h"
-#include "../lock/type.h"  
+#include "../lock/type.h"
 #include "../lock/method.h"
-#include "../arch/method.h" 
+#include "../arch/method.h"
 #include "../lib/mod.h"
 
-/*-------------------- 工作在M-mode --------------------*/
+// -------------------- M-mode timer side --------------------
 
-// in trap.S M-mode时钟中断处理流程()
+// from trap.S
 extern void timer_vector();
 
-// 每个CPU在时钟中断中需要的临时空间
+// each hart's mscratch scratchpad for M-mode timer_vector
 static uint64 mscratch[NCPU][5] = {0};
 
 void timer_init()
 {
-    // 获取当前cpuid
     int hartid = r_tp();
 
-    // 设置初始值 cmp_time = cur_time + time_interval
-    *(uint64*)CLINT_MTIMECMP(hartid) = *(uint64*)CLINT_MTIME + INTERVAL;
+    volatile uint64 *mtime    = (volatile uint64 *)CLINT_MTIME;
+    volatile uint64 *mtimecmp = (volatile uint64 *)CLINT_MTIMECMP(hartid);
+    *mtimecmp = *mtime + INTERVAL;
 
-    // cur_mscratch 指向当前CPU的msrcatch数组
-    uint64* cur_mscratch = mscratch[hartid];
+    uint64 *cur = mscratch[hartid];
+    cur[3] = (uint64)mtimecmp;
+    cur[4] = INTERVAL;
 
-    // cur_mscratch[1] [2] [3]先空着, 在trap.S里使用
-    cur_mscratch[3] = CLINT_MTIMECMP(hartid); // cmp_time
-    cur_mscratch[4] = INTERVAL;               // interval
-
-    // 存放到临时寄存器, 便于与trap.S中的timer_vector协作
-    w_mscratch((uint64)cur_mscratch);
-
-    // 设置 M-mode 中断处理函数
+    w_mscratch((uint64)cur);
     w_mtvec((uint64)timer_vector);
 
-    // 打开 M-mode 中断总开关
+    w_mie(r_mie() | MIE_MTIE);
     w_mstatus(r_mstatus() | MSTATUS_MIE);
 
-    // 打开 M-mode 时钟中断分开关
-    w_mie(r_mie() | MIE_MTIE);
+    // ✅ 打印调试信息
+    printf("[dbg] timer_init: hart=%d, mtime=%p, mtimecmp=%p, interval=%lu\n",
+           hartid, mtime, mtimecmp, INTERVAL);
 }
 
-/*--------------------- 工作在S-mode --------------------*/
 
-// 全局系统时钟
+// -------------------- S-mode accounting side --------------------
+
 static timer_t sys_timer[NCPU];
 
 static struct {
     spinlock_t lk;
-    uint64 total_ticks;  
+    uint64 total_ticks;
 } sys_total_timer;
 
 void timer_create()
 {
-    int cpuid = r_tp();  
+    int cpuid = r_tp();
 
-    // 每个CPU初始化自己的锁和计数
+    // per-hart counter init
     spinlock_init(&sys_timer[cpuid].lk, "sys_timer");
     sys_timer[cpuid].ticks = 0;
-    // 仅CPU0初始化全局总计数器（避免重复初始化）
+
+    // only hart0 init global counter/lock
     if (cpuid == 0) {
         spinlock_init(&sys_total_timer.lk, "sys_total_timer");
         sys_total_timer.total_ticks = 0;
     }
 }
-void timer_update()
-{ 
+
+// this is called from trap_kernel_handler() for timer/SSIP
+void timer_interrupt_handler(void)
+{
     int cpuid = r_tp();
 
+    // bump global ticks
     spinlock_acquire(&sys_total_timer.lk);
-    sys_total_timer.total_ticks++;  
+    sys_total_timer.total_ticks++;
+    uint64 now_total = sys_total_timer.total_ticks;
     spinlock_release(&sys_total_timer.lk);
 
-    // 更新当前CPU的计数
+    // bump per-cpu ticks
     spinlock_acquire(&sys_timer[cpuid].lk);
     sys_timer[cpuid].ticks++;
-    // printf中直接使用全局总计数
-    printf("cpu %d:di da (total ticks: %d) | 全局总计数: %d\n", 
-        cpuid, 
-        (int)sys_timer[cpuid].ticks, 
-        timer_get_ticks());  
+    uint64 hart_ticks = sys_timer[cpuid].ticks;
     spinlock_release(&sys_timer[cpuid].lk);
 
-    // 更新当前CPU的mtimecmp
-    volatile uint64 *mtime = (volatile uint64 *)CLINT_MTIME;
-    volatile uint64 *mtimecmp = (volatile uint64 *)CLINT_MTIMECMP(cpuid);
-    *mtimecmp = *mtime + INTERVAL;
+    // *** DEBUG PRINT so we SEE timer interrupts actually happening ***
+    // this should show up even while user code is running
+    printf("TIMER TICK: cpu=%d hart_ticks=%lu total=%lu\n",
+           cpuid, hart_ticks, now_total);
+
+    // clear SSIP (software interrupt pending bit for S-mode, bit1 of sip)
+    // this acknowledges the "timer interrupt" we synthesized in timer_vector
+    w_sip(r_sip() & ~2ULL);
 }
 
+// helper if you ever want to read total_ticks elsewhere
 uint64 timer_get_ticks()
 {
-    uint64 total = 0;
+    uint64 total;
     spinlock_acquire(&sys_total_timer.lk);
     total = sys_total_timer.total_ticks;
     spinlock_release(&sys_total_timer.lk);
