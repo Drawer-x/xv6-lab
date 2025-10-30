@@ -1,101 +1,100 @@
-# ================================================================
-# ECNU-OSLAB-2025 内核 Makefile（修正版）
-# 自动生成 user/initcode.h + 编译 kernel + 运行 QEMU
-# ================================================================
+# 引入通用配置文件
+include common.mk
 
-# 交叉编译工具链
-CC      = riscv64-linux-gnu-gcc
-LD      = riscv64-linux-gnu-ld
-OBJCOPY = riscv64-linux-gnu-objcopy
-OBJDUMP = riscv64-linux-gnu-objdump
-GDB     = riscv64-linux-gnu-gdb
+# 配置CPU核心数量
+CPUNUM = 2
+# 定义目标文件输出目录
+TARGET = target
+# 定义各模块路径
+KernelPath = src/kernel
+UserPath = src/user
+# 内核链接脚本
+KERNEL_LD  = kernel.ld
+# 定义内核目标文件路径
+ELFKernel = $(TARGET)/kernel/kernel-qemu.elf
+NakedKernel = $(TARGET)/kernel/kernel-qemu.bin
+ELFUser = $(TARGET)/user/initcode.h
 
-# 目录
-KERNEL_DIR = src/kernel
-USER_DIR   = src/user
-TARGET_DIR = target
+# 收集内核代码文件和用户代码文件(.c .S)
+KernelSourceFile = $(wildcard $(KernelPath)/*.c) $(wildcard $(KernelPath)/*.S)
+KernelSourceFile += $(wildcard $(KernelPath)/*/*.c) $(wildcard $(KernelPath)/*/*.S)
+UserSourceFile = $(wildcard $(UserPath)/*.c)
 
-# 编译参数
-CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb -gdwarf-2 \
-         -MD -mcmodel=medany -ffreestanding -fno-common -nostdlib \
-         -mno-relax -I. -fno-stack-protector -fno-pie -no-pie
+# 生成目标文件(.o)路径列表
+KernelOBJ = $(patsubst $(KernelPath)/%.S, $(TARGET)/kernel/%.o, $(filter %.S, $(KernelSourceFile)))
+KernelOBJ += $(patsubst $(KernelPath)/%.c, $(TARGET)/kernel/%.o, $(filter %.c, $(KernelSourceFile)))
+UserOBJ = $(patsubst $(UserPath)/%.c, $(TARGET)/user/%.o, $(filter %.c, $(UserSourceFile)))
 
-LDFLAGS = -T kernel.ld -nostdlib -no-pie -v
+# QEMU模拟器配置
+QEMU     = qemu-system-riscv64  # 指定QEMU程序
+QEMUOPTS = -machine virt -bios none -kernel $(TARGET)/kernel/kernel-qemu.elf  # 基础启动参数
+QEMUOPTS += -m 128M -smp $(CPUNUM) -nographic  # 内存、CPU数量及无图形界面配置
 
-# 目标文件
-KERNEL_ELF = $(TARGET_DIR)/kernel-qemu.elf
-INITCODE_H = $(USER_DIR)/initcode.h
-INITCODE_ELF = $(USER_DIR)/initcode.elf
-INITCODE_BIN = $(USER_DIR)/initcode.bin
+# 调试相关配置
+GDBPORT = $(shell expr `id -u` % 5000 + 25000)  # 动态计算GDB端口号
+# 根据QEMU版本选择合适的GDB调试参数
+QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+	then echo "-gdb tcp::$(GDBPORT)"; \
+	else echo "-s -p $(GDBPORT)"; fi)
 
-# 搜索所有源文件
-C_SRC  := $(shell find $(KERNEL_DIR) -name "*.c")
-S_SRC  := $(shell find $(KERNEL_DIR) -name "*.S")
-OBJ    := $(patsubst src/%.c, $(TARGET_DIR)/%.o, $(C_SRC)) \
-           $(patsubst src/%.S, $(TARGET_DIR)/%.o, $(S_SRC))
+# 生成GDB初始化文件
+.gdbinit: .gdbinit.tmpl-riscv
+	sed "s/:1234/:$(GDBPORT)/" < $^ > $@
 
-# ================================================================
-# 默认目标
-# ================================================================
+# 创建输出目录结构（如果不存在）
+.PHONY: $(TARGET)
+$(TARGET):
+ifeq ($(wildcard $(TARGET)),)
+	@mkdir -p $(TARGET)/kernel
+	@mkdir -p $(TARGET)/kernel/arch
+	@mkdir -p $(TARGET)/kernel/boot
+	@mkdir -p $(TARGET)/kernel/lock
+	@mkdir -p $(TARGET)/kernel/lib
+	@mkdir -p $(TARGET)/kernel/mem
+	@mkdir -p $(TARGET)/kernel/trap
+	@mkdir -p $(TARGET)/kernel/proc
+	@mkdir -p $(TARGET)/kernel/syscall
+	@mkdir -p $(TARGET)/user
+endif
 
-.PHONY: all run qemu clean
-
-all: $(KERNEL_ELF)
-
-run: $(KERNEL_ELF)
-	qemu-system-riscv64 -machine virt -bios none -kernel target/kernel-qemu.elf -nographic -serial mon:stdio
-
-qemu: run
-
-# ================================================================
-# 编译规则
-# ================================================================
-
-# 生成 kernel ELF
-$(KERNEL_ELF): $(OBJ)
-	@mkdir -p $(dir $@)
-	$(LD) -o $@ \
-		target/kernel/boot/entry.o \
-		$(filter-out target/kernel/boot/entry.o,$^) \
-		$(LDFLAGS)
-	@echo "[LD]  -> $@"
-
-
-# C 源文件
-$(TARGET_DIR)/%.o: src/%.c $(INITCODE_H)
-	@mkdir -p $(dir $@)
+# 编译规则：将汇编文件(.S)编译为目标文件(.o)
+$(TARGET)/kernel/%.o: $(KernelPath)/%.S
 	$(CC) $(CFLAGS) -c -o $@ $<
-	@echo "[CC]  -> $<"
 
-# 汇编源文件
-$(TARGET_DIR)/%.o: src/%.S
-	@mkdir -p $(dir $@)
+# 编译规则：将C文件(.c)编译为目标文件(.o)
+$(TARGET)/kernel/%.o: $(KernelPath)/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
-	@echo "[AS]  -> $<"
 
-# ================================================================
-# user/initcode 构建规则
-# ================================================================
+# 编译规则：将C文件(.c)编译为目标文件(.o)
+$(TARGET)/user/%.o: $(UserPath)/%.c
+	$(CC) $(CFLAGS) -march=rv64g -nostdinc -c -o $@ $<
 
-# 1. 编译 initcode.c -> initcode.elf
-$(INITCODE_ELF): $(USER_DIR)/initcode.S $(USER_DIR)/initcode.ld
-	$(CC) -nostdlib -nostartfiles -Wl,--build-id=none -T $(USER_DIR)/initcode.ld -o $@ $<
-	@echo "[LD]  -> $@"
+# 链接生成内核ELF文件
+$(ELFKernel): $(KernelOBJ)
+	$(LD) $(LDFLAGS) -T $(KERNEL_LD) $^ -o $@
 
-# 2. 导出成二进制 -> initcode.bin
-$(INITCODE_BIN): $(INITCODE_ELF)
-	$(OBJCOPY) -S -O binary $< $@
-	@echo "[OBJCOPY] -> $@"
+# 生成initcode.h
+$(ELFUser): $(UserOBJ)
+	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $(TARGET)/user/initcode.out $(TARGET)/user/initcode.o
+	$(OBJCOPY) -S -O binary $(TARGET)/user/initcode.out $(TARGET)/user/initcode
+	xxd -i $(TARGET)/user/initcode > $(UserPath)/initcode.h
 
-# 3. 转换成 C 数组 -> initcode.h
-$(INITCODE_H): $(INITCODE_BIN)
-	xxd -i $< > $@
-	@echo "[GEN] -> $@"
 
-# ================================================================
-# 清理
-# ================================================================
+# 构建目标：创建输出目录、编译用户程序、编译内核
+build: $(TARGET) $(ELFUser) $(ELFKernel)
+	@echo "===== make success! ====="
 
+# 运行目标：先构建再启动QEMU
+run: build
+	$(QEMU) $(QEMUOPTS)
+
+# 调试目标：先构建再启动带GDB调试的QEMU
+debug: build .gdbinit
+	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
+
+# 清理目标：删除输出目录
+.PHONY: clean
 clean:
-	rm -rf $(TARGET_DIR) $(USER_DIR)/initcode.{elf,bin,h}
-	@echo "[CLEAN] done."
+	rm -rf target
+	rm -f .gdbinit
+	rm -f $(UserPath)/initcode.h
