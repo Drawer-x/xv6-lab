@@ -1,3 +1,4 @@
+// src/kernel/trap/trap_user.c
 #include "mod.h"
 #include "../lib/method.h"
 #include "../mem/method.h"
@@ -16,207 +17,119 @@ extern void user_return(trapframe_t *tf, uint64 satp);
 extern void timer_interrupt_handler(void);
 extern void external_interrupt_handler(void);
 
-// kernel trap entry (in trap.S)
-extern void kernel_vector(void);
-
-// --------------------------------------------------
-// tiny hex printer for low-level UART debug
-static void printhex64(uint64 x)
-{
-    for (int i = 60; i >= 0; i -= 4) {
-        int d = (x >> i) & 0xF;
-        if (d < 10)
-            uart_putc_sync('0' + d);
-        else
-            uart_putc_sync('a' + d - 10);
-    }
-}
-
-// dump current trap-related CSRs
-static void dump_trap_state(void)
-{
-    uint64 satp_val   = r_satp();
-    uint64 sepc_val   = r_sepc();
-    uint64 scause_val = r_scause();
-    uint64 stval_val  = r_stval();
-
-    // prefix "S" so we can see trap entries in the log stream
-    uart_putc_sync('S');
-
-    uart_putc_sync('[');
-    uart_putc_sync('d'); uart_putc_sync('b'); uart_putc_sync('g');
-    uart_putc_sync(']');
-    uart_putc_sync(' ');
-
-    // satp=
-    uart_putc_sync('s'); uart_putc_sync('a'); uart_putc_sync('t'); uart_putc_sync('p'); uart_putc_sync('=');
-    printhex64(satp_val);
-    uart_putc_sync(' ');
-
-    // pc=
-    uart_putc_sync('p'); uart_putc_sync('c'); uart_putc_sync('=');
-    printhex64(sepc_val);
-    uart_putc_sync(' ');
-
-    // cause=
-    uart_putc_sync('c'); uart_putc_sync('a'); uart_putc_sync('u'); uart_putc_sync('s'); uart_putc_sync('e'); uart_putc_sync('=');
-    printhex64(scause_val);
-    uart_putc_sync(' ');
-
-    // val=
-    uart_putc_sync('v'); uart_putc_sync('a'); uart_putc_sync('l'); uart_putc_sync('=');
-    printhex64(stval_val);
-    uart_putc_sync('\n');
-}
-
-// --------------------------------------------------
-// return_to_user:
-//  called both on first entry (trap_user_return) and after a trap (trap_user_handler)
-//  sets up CSRs so that trampoline:user_return will restore user regs and sret to U.
-//
-//  contract:
-//    - p->tf is the trapframe for this proc
-//    - tf->sp etc. already prepared
-//    - sepc has already been set to the user PC we want to resume (caller responsibility)
+// 内部工具：从内核返回用户
 static void return_to_user(proc_t *p)
 {
     trapframe_t *tf = p->tf;
 
-    // sscratch = trapframe (给下次 user_vector 用)
+    // sscratch = trapframe
     w_sscratch((uint64)tf);
 
-    // stvec = user_vector (用户态trap先进trampoline)
-    w_stvec((uint64)user_vector);
+    // stvec = trampoline + (user_return - trampoline)    (在 trampoline 里算的)
+    uint64 trampoline_pa = (uint64)trampoline;
+    uint64 user_ret_off  = (uint64)user_return - (uint64)trampoline;
+    w_stvec(trampoline_pa + user_ret_off);
 
-    // 允许时钟类中断，先别让外部中断(SEIE)打断用户
-    uint64 sie = r_sie();
-    sie |= (SIE_STIE | SIE_SSIE);   // 计时器/软件中断
-    sie &= ~SIE_SEIE;               // 先禁外部中断 (PLIC/UART)
-    w_sie(sie);
+    // 切回用户页表
+    w_satp(MAKE_SATP(p->pgtbl));
+    sfence_vma();
 
-    // 设定 sstatus：
-    //  - SPP=0: sret 之后去 U-mode
-    //  - SPIE=1: 允许下次再陷回 S-mode 时 SIE 会自动开
-    //  - SIE=0: 现在先别开全局中断，避免我们还在过渡期就被重入
-    uint64 sstatus = r_sstatus();
-    sstatus &= ~SSTATUS_SPP;   // 目标是 U
-    sstatus |=  SSTATUS_SPIE;  // 以后允许 S 中断
-    sstatus &= ~SSTATUS_SIE;   // 关键：此刻保持关中断，避免重入风暴
-    w_sstatus(sstatus);
+    // 开中断 + 保留 S 态中断使能
+    w_sstatus(r_sstatus() | SSTATUS_SPIE | SSTATUS_SUM);
 
-    // 调试标记：准备真正回到用户态
-    uart_putc_sync('U');
-
-    // 跳到 trampoline.user_return：
-    //   - 它会切用户页表 satp
-    //   - 恢复用户寄存器
-    //   - sret
-    user_return(tf, MAKE_SATP(p->pgtbl));
-
-    __builtin_unreachable();
+    // sepc 已经在外面写好了
 }
 
-
-// --------------------------------------------------
-// trap_user_handler:
-//  called AFTER user_vector in trampoline.S has:
-//    - saved user regs into tf
-//    - switched to kernel page table
-//    - jumped here with a0 still == tf (and myproc()->tf == tf)
-//
-//  here we:
-//    - classify trap (interrupt vs syscall)
-//    - handle it
-//    - set up to return_to_user()
+// 真正的 user trap handler（trampoline.S 的 user_vector 会跳到这里）
 void trap_user_handler(void)
 {
-    // FIRST THING: make sure further traps (e.g. timer ticks while we're in S)
-    // go through the full kernel path, not trampoline again.
-    // i.e. in-kernel we want stvec = kernel_vector.
-    w_stvec((uint64)kernel_vector);
+    uint64 scause = r_scause();
+    uint64 sepc   = r_sepc();
+    uint64 stval  = r_stval();   // 出错的地址（page fault 的时候用）
 
     proc_t *p = myproc();
     trapframe_t *tf = p->tf;
-    assert(tf != NULL, "trap_user_handler: null trapframe");
 
-    dump_trap_state(); // low-level state dump each time we enter
-
-    uint64 scause  = r_scause();
-    uint64 sepc    = r_sepc();
-    uint64 is_intr = (scause >> 63) & 1;
-    uint64 code    = scause & 0xfff;
-
-    if (is_intr) {
+    if (scause & (1ULL << 63))
+    {
         // -------------------------
-        // Asynchronous interrupt
+        // 异步中断
         // -------------------------
-        if (code == 5 || code == 1) {
-            // S-mode timer interrupt (STIP=5) OR software interrupt (SSIP=1)
-            // Some designs forward M-timer via SSIP=1, others use STIP=5.
-            uart_putc_sync('T'); // prove timer fired
+        uint64 code = scause & 0xfff;
+        if (code == 5 || code == 1)
+        {
+            // S-mode timer interrupt / software interrupt
+            uart_putc_sync('T');
             timer_interrupt_handler();
 
-            // resume the same user PC
-            w_sepc(sepc);
-
-        } else if (code == 9) {
-            // S-mode external interrupt (PLIC -> UART, etc.)
-            external_interrupt_handler();
-
-            // resume same user PC
-            w_sepc(sepc);
-
-        } else {
-            printf("[usertrap] unexpected S interrupt code=%d\n", (int)code);
-            // still try to continue at same PC
+            // 回到原PC
             w_sepc(sepc);
         }
-
-    } else {
+        else if (code == 9)
+        {
+            // 外设中断
+            external_interrupt_handler();
+            w_sepc(sepc);
+        }
+        else
+        {
+            printf("[usertrap] unexpected S interrupt code=%d\n", (int)code);
+            w_sepc(sepc);
+        }
+    }
+    else
+    {
         // -------------------------
-        // Synchronous exception
+        // 同步异常
         // -------------------------
-        if (code == 8) {
-            // U-mode ecall (syscall)
-            uart_putc_sync('E'); // syscall marker
+        uint64 code = scause & 0xfff;
+        if (code == 8)
+        {
+            // ecall from U
+            uart_putc_sync('E');
 
-            uint64 num = tf->a7;  // by convention: syscall number in a7
-            if (num == SYS_helloworld) {
-                printf("proczero: hello world!\n");
-            } else {
-                printf("[user] unknown syscall %lu\n", num);
-            }
-
-            // skip ecall so we don't immediately trap again
+            // ecall 会让 sepc 指向 ecall 本身，要在进 sys 前 +4
             w_sepc(sepc + 4);
 
-        } else {
-            // unhandled exception from user
-            printf("[usertrap] unhandled sync scause=%p sepc=%p stval=%p\n",
-                   (void*)scause, (void*)sepc, (void*)r_stval());
+            // 交给通用 syscall 分发
+            syscall();
+        }
+        else if (code == 13 || code == 15)
+        {
+            // load/store/AMO page fault -> 可能是用户栈要自动增长
+            uint64 new_npage = uvm_ustack_grow(p->pgtbl, p->ustack_npage, stval);
+            if (new_npage == (uint64)-1)
+            {
+                printf("[usertrap] bad user stack grow: stval=%p\n", (void *)stval);
+                panic("user stack grow failed");
+            }
+            p->ustack_npage = new_npage;
+
+            // 继续从原来的指令执行
+            w_sepc(sepc);
+        }
+        else
+        {
+            printf("[usertrap] unhandled sync scause=0x%lx sepc=0x%lx stval=0x%lx\n",
+                   scause, sepc, stval);
             panic("unhandled user exception");
         }
     }
 
-    // All handling done; go resume user mode.
+    // 处理完了回用户
     return_to_user(p);
 }
 
-// --------------------------------------------------
-// trap_user_return:
-//  called once when we FIRST drop into user mode (proc_make_first -> swtch -> here).
-//  We set initial sepc to the process entry point, then share the same
-//  return_to_user() path to actually jump into user.
+// 第一次进用户态
 void trap_user_return(void)
 {
     proc_t *p  = myproc();
     trapframe_t *tf = p->tf;
     assert(tf != NULL, "trap_user_return: null trapframe");
 
-    // user entry point was stashed by proc_make_first() in user_to_kern_epc
+    // 第一次的 sepc 是进程创建时写进去的
     uint64 entry = tf->user_to_kern_epc;
     w_sepc(entry);
 
-    // now just do the same finalization we do after a trap
     return_to_user(p);
 }

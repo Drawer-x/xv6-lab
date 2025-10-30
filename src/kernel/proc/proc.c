@@ -101,6 +101,8 @@ void proc_make_first()
     }
     proczero.ustack_npage = PROC0_USTACK_PAGES;
     proczero.heap_top     = ustack_bot; // 简单约定：堆顶先放在栈底之下
+    proczero.mmap         = NULL;       // lab-5: 初始没有任何 mmap 区域
+
 
     // 5) 进程的“内核栈”和 context
     proczero.kstack = alloc_kstack_page();
