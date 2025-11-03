@@ -4,5 +4,8 @@
 pgtbl_t proc_pgtbl_init(uint64 trapframe);
 void proc_make_first();
 
-// swtch.S: 内核上下文切换函数
-void swtch(context_t *old, context_t *new);
+
+// 用户地址空间布局
+#define USER_CODE_VA    0x0000000000001000  // 代码起始地址
+#define USER_HEAP_TOP   0x0000000000009000  // 堆顶（栈底）
+#define USER_STACK_TOP  0x000000000000a000  // 栈顶

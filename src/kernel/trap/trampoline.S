@@ -96,20 +96,20 @@ user_return:
         mv      t0, a1          # t0 := user_satp
         ld      t1, 72(a0)      # t1 := user t0 (trapframe->t0)
 
-        # (1) restore user registers (except t0)
+        # (1) restore user registers (except t0 and a0 for now)
         ld      ra, 40(a0)
         ld      sp, 48(a0)
         ld      gp, 56(a0)
         ld      tp, 64(a0)
 
-        # skip t0 slot (72)
+        # skip t0 slot (72) - we'll restore it later
         ld      t2, 80(a0)
         ld      t3, 88(a0)
 
         ld      s0, 96(a0)
         ld      s1, 104(a0)
 
-        # skip 112(a0) (a0 not used)
+        # 恢复 a1-a7
         ld      a1, 120(a0)
         ld      a2, 128(a0)
         ld      a3, 136(a0)
@@ -134,12 +134,15 @@ user_return:
         ld      t5, 272(a0)
         ld      t6, 280(a0)
 
-        # (2) switch to user page table
+        # (2) 现在恢复 a0 - 必须放在最后
+        ld      a0, 112(a0)     # 从 saved_sscratch 恢复用户态的 a0
+
+        # (3) switch to user page table
         csrw    satp, t0
         sfence.vma zero, zero
 
-        # (3) now re-install user's t0 without touching trapframe
+        # (4) restore user's t0
         mv      t0, t1
 
-        # (4) return to user
+        # (5) return to user
         sret

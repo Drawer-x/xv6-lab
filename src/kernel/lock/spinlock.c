@@ -71,12 +71,19 @@ void spinlock_acquire(spinlock_t *lk)
 // 释放自旋锁
 void spinlock_release(spinlock_t *lk)
 {
-    // 检查是否持有锁
-    if (!spinlock_holding(lk)) {
+    // // 检查是否持有锁
+    // if (!spinlock_holding(lk)) {
+    //     panic("spinlock_release: not holding\n");
+    // }
+    // 在修改任何状态之前检查是否持有锁
+    int cpuid = mycpuid();
+    if (lk->cpuid != cpuid || lk->locked == 0) {
         panic("spinlock_release: not holding\n");
     }
-    
     lk->cpuid = -1;  // 重置为-1表示未持有
+
+    // 插入内存屏障
+    __sync_synchronize();
     
     // 原子释放锁
     __sync_lock_release(&lk->locked);

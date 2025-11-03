@@ -73,8 +73,7 @@ typedef struct mmap_region mmap_region_t;
 typedef struct proc
 {
     int pid; // 标识符
-y
-    pgtbl_t pgtbl;       // 用户态页表
+    pgtbl_t pgtbl;      // 用户态页表
     uint64 heap_top;     // 用户堆顶(以字节为单位)
     uint64 ustack_npage; // 用户栈占用的页面数量
     mmap_region_t *mmap; // 用户态mmap区域

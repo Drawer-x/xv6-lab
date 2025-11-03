@@ -1,160 +1,169 @@
+// src/kernel/proc/proc.c
 #include "mod.h"
 #include "method.h"
 #include "../mem/method.h"
 #include "../mem/type.h"
 #include "../lib/method.h"
 #include "../lib/type.h"
+#include "../trap/mod.h"
+
+// 这个文件通过make build生成, 是proczero对应的ELF文件
 #include "../../user/initcode.h"
-extern pgtbl_t kernel_pgtbl;
+#define initcode target_user_initcode
+#define initcode_len target_user_initcode_len
 
-
-// trampoline & user-vector（在汇编里）
+// in trampoline.S
 extern char trampoline[];
-extern char user_vector[];
-// 汇编出口：从内核返回用户态
-extern void user_return(trapframe_t *tf, uint64 satp);
 
-// ========== 本文件仅使用你仓库里已有的常量/函数/结构 ==========
+// in swtch.S
+extern void swtch(context_t *old, context_t *new);
 
-// 一些CSR小工具（只在本文件内部使用）
+// in trap/trap_user.c
+extern void trap_user_return(void);
+extern void trap_user_handler(void);
 
-// ---- 进程0的用户空间布局（按实验约定可在此处配置）----
-// 若你的 README/脚本对用户地址另有明确要求，改成相应值即可。
-#ifndef PROC0_UCODE_VA
-#define PROC0_UCODE_VA  (PGSIZE)           // 第一个用户页面装入代码，避免空页
-#endif
-#ifndef PROC0_USTACK_PAGES
-#define PROC0_USTACK_PAGES 1               // 先给1页用户栈
-#endif
-#ifndef PROC0_USTACK_TOP
-#define PROC0_USTACK_TOP  (PROC0_UCODE_VA + 8*PGSIZE) // 预留一段空隙，便于观察
-#endif
-
-// 内核全局的第一个进程（仅 lab-4）
+// 第一个用户进程
 static proc_t proczero;
 
-// 为进程分配一个内核栈（直接用可分配物理页，恒等映射即可）
-static uint64 alloc_kstack_page()
-{
-    void *page = pmem_alloc(true);
-    assert(page != NULL, "alloc_kstack_page: pmem_alloc failed");
-    memset(page, 0, PGSIZE);
-    return (uint64)page; // 恒等映射：VA == PA（见 kvm.c 的 ALLOC 区恒等映射）
-}
+// 内核页表（在 mem/kvm.c 中定义）
+extern pgtbl_t kernel_pgtbl;
 
-/*
- * 为“用户页表”做最小初始化：
- *  - 分配根页表
- *  - 在“同一虚拟地址”上映射 trampoline（一页，RX）
- *    这样切到用户页表后，trampoline 仍可在相同 VA 上被命中
- */
-pgtbl_t proc_pgtbl_init(uint64 /*trapframe_pa: 未在本阶段映射到用户VA*/)
+// 移除这里的重复定义，使用 proc/method.h 中的定义
+// 不要重新定义 USER_CODE_VA, USER_HEAP_TOP, USER_STACK_TOP
+
+// 获得一个初始化过的用户页表
+// 完成trapframe和trampoline的映射
+pgtbl_t proc_pgtbl_init(uint64 trapframe)
 {
+    // 分配根页表
     pgtbl_t pgtbl = (pgtbl_t)pmem_alloc(true);
     assert(pgtbl != NULL, "proc_pgtbl_init: root alloc failed");
     memset(pgtbl, 0, PGSIZE);
 
-    // trampoline 同VA映射（与内核一致）
+    printf("[proc_pgtbl_init] creating user page table at %p\n", pgtbl);
+
+    // 1. 映射 trampoline 页（ supervisor only ）
     uint64 tramp_va = (uint64)ALIGN_DOWN((uint64)trampoline, PGSIZE);
-    uint64 tramp_pa = tramp_va; // 你的内核页表是恒等映射，trampoline 也在内核地址段
-    vm_mappages(pgtbl, tramp_va, tramp_pa, PGSIZE, PTE_R | PTE_X); // 不标U位
+    uint64 tramp_pa = tramp_va; // 内核恒等映射
+    vm_mappages(pgtbl, tramp_va, tramp_pa, PGSIZE, PTE_R | PTE_X);
+    printf("  trampoline: va=%p -> pa=%p (flags=R|X)\n", 
+           (void*)tramp_va, (void*)tramp_pa);
+
+    // 2. 映射 trapframe 页（ supervisor only ）
+    uint64 tf_va = TRAPFRAME;
+    uint64 tf_pa = trapframe;
+    vm_mappages(pgtbl, tf_va, tf_pa, PGSIZE, PTE_R | PTE_W);
+    printf("  trapframe: va=%p -> pa=%p (flags=R|W)\n", 
+           (void*)tf_va, (void*)tf_pa);
 
     return pgtbl;
 }
 
 /*
- * 创建并切入第一个用户进程 proczero：
- *  - 分配 trapframe（内核页）
- *  - 建用户页表；映射：trampoline、initcode（RXU）、ustack（RWU）
- *  - 准备 trapframe 的“返回内核”字段：kernel satp、kstack、trap向量、tp
- *  - 准备 context：ra=trap_user_return，sp=内核栈顶
- *  - 把当前CPU的 proc 指向 proczero，并 swtch 进去
- */
+    第一个用户态进程的创建
+    它的代码和数据位于initcode.h的initcode数组
+
+    第一个进程的用户地址空间布局:
+    trapoline   (1 page)
+    trapframe   (1 page)
+    ustack      (1 page)
+    .......
+                        <--heap_top
+    code + data (1 page)
+    empty space (1 page) 最低的4096字节 不分配物理页，同时不可访问
+
+	注意: 用用户空间的地址映射需要标记 PTE_U
+*/
 void proc_make_first()
 {
-    // 清零 & 基本标识
+    // 清零进程结构体
     memset(&proczero, 0, sizeof(proczero));
     proczero.pid = 0;
 
-    // 1) trapframe（仅在内核访问，放内核物理页）
+    printf("[proc_make_first] creating first user process\n");
+    printf("  user layout: code=%p, heap_top=%p, stack_top=%p\n",
+           (void*)USER_CODE_VA, (void*)USER_HEAP_TOP, (void*)USER_STACK_TOP);
+
+    // 1. 分配 trapframe（内核物理页）
     proczero.tf = (trapframe_t *)pmem_alloc(true);
     assert(proczero.tf != NULL, "proc_make_first: trapframe alloc failed");
     memset(proczero.tf, 0, PGSIZE);
+    printf("  trapframe allocated at %p\n", proczero.tf);
 
-    // 2) 用户页表
+    // 2. 创建用户页表
     proczero.pgtbl = proc_pgtbl_init((uint64)proczero.tf);
 
-    // 3) 装载 initcode 到用户地址空间（1页）
-    assert(src_user_initcode_bin_len <= PGSIZE, "initcode too large (>1 page)");
+    // 3. 映射用户代码页
+    assert(initcode_len <= PGSIZE, "initcode too large (>1 page)");
     void *ucode_page = pmem_alloc(false);
     assert(ucode_page != NULL, "proc_make_first: ucode alloc failed");
     memset(ucode_page, 0, PGSIZE);
-    memmove(ucode_page, src_user_initcode_bin, (uint32)src_user_initcode_bin_len);
-    vm_mappages(proczero.pgtbl, PROC0_UCODE_VA, (uint64)ucode_page, PGSIZE, PTE_R | PTE_X | PTE_U);
+    memmove(ucode_page, initcode, (uint32)initcode_len);
+    
+    vm_mappages(proczero.pgtbl, USER_CODE_VA, (uint64)ucode_page, PGSIZE, 
+                PTE_R | PTE_X | PTE_U);
+    printf("  user code: va=%p -> pa=%p (flags=R|X|U)\n", 
+           (void*)USER_CODE_VA, ucode_page);
 
-    // 4) 分配并映射用户栈（向上生长，sp 初值为 TOP）
-    uint64 ustack_bot = ALIGN_DOWN(PROC0_USTACK_TOP - PROC0_USTACK_PAGES * PGSIZE, PGSIZE);
-    for (uint64 i = 0; i < PROC0_USTACK_PAGES; i++) {
-        void *pg = pmem_alloc(false);
-        assert(pg != NULL, "proc_make_first: ustack alloc failed");
-        vm_mappages(proczero.pgtbl, ustack_bot + i * PGSIZE, (uint64)pg, PGSIZE, PTE_R | PTE_W | PTE_U);
-    }
-    proczero.ustack_npage = PROC0_USTACK_PAGES;
-    proczero.heap_top     = ustack_bot; // 简单约定：堆顶先放在栈底之下
-    proczero.mmap         = NULL;       // lab-5: 初始没有任何 mmap 区域
+    // 4. 映射用户栈页
+    void *ustack_page = pmem_alloc(false);
+    assert(ustack_page != NULL, "proc_make_first: ustack alloc failed");
+    memset(ustack_page, 0, PGSIZE);
+    
+    uint64 ustack_va = USER_HEAP_TOP; // 栈底
+    vm_mappages(proczero.pgtbl, ustack_va, (uint64)ustack_page, PGSIZE, 
+                PTE_R | PTE_W | PTE_U);
+    printf("  user stack: va=%p -> pa=%p (flags=R|W|U)\n", 
+           (void*)ustack_va, ustack_page);
 
+    proczero.ustack_npage = 1;
+    proczero.heap_top = USER_HEAP_TOP; // 堆顶在栈底
+    proczero.mmap = NULL;
 
-    // 5) 进程的“内核栈”和 context
-    proczero.kstack = alloc_kstack_page();
+    // 5. 分配内核栈
+    proczero.kstack = (uint64)pmem_alloc(true);
+    assert(proczero.kstack != 0, "proc_make_first: kstack alloc failed");
+    memset((void*)proczero.kstack, 0, PGSIZE);
+    printf("  kernel stack at %p\n", (void*)proczero.kstack);
+
+    // 6. 设置上下文
     memset(&proczero.ctx, 0, sizeof(proczero.ctx));
-    proczero.ctx.ra = (uint64)trap_user_return;     // swtch 进入后，先走 trap_user_return
-    proczero.ctx.sp = proczero.kstack + PGSIZE;     // 内核栈顶
+    proczero.ctx.ra = (uint64)trap_user_return;
+    proczero.ctx.sp = proczero.kstack + PGSIZE; // 栈顶
 
-    // 6) 预置 trapframe 的“回内核”必需字段（供 user->kernel 的 user_vector 使用）
-    //    对照 trampoline.S：进入 user_vector 后会：
-    //      sp <- user_to_kern_sp
-    //      tp <- user_to_kern_hartid
-    //      t0 <- user_to_kern_trapvector （即 C 端 trap_user_handler 的地址）
-    //      satp <- user_to_kern_satp （切回内核页表）
+    // 7. 设置 trapframe 的回内核信息
     proczero.tf->user_to_kern_satp = MAKE_SATP(kernel_pgtbl);
-    proczero.tf->user_to_kern_sp         = proczero.kstack + PGSIZE; // 进内核用的栈顶
+    proczero.tf->user_to_kern_sp = proczero.kstack + PGSIZE;
     proczero.tf->user_to_kern_trapvector = (uint64)trap_user_handler;
-    proczero.tf->user_to_kern_hartid     = r_tp();                   // “保存内核 tp”（你的注释就是这么要求的）
+    proczero.tf->user_to_kern_hartid = r_tp();
 
-    // 7) 预置“首次进入用户态”的寄存器
-    //    trampoline 的 user_return 会把 tf 中通用寄存器恢复后 sret
-    proczero.tf->user_to_kern_epc = PROC0_UCODE_VA; // 作为“初次 sepc”
-    proczero.tf->sp               = PROC0_USTACK_TOP;
+    // 8. 设置用户态初始寄存器
+    proczero.tf->user_to_kern_epc = USER_CODE_VA; // 用户程序入口
+    proczero.tf->sp = USER_STACK_TOP;             // 用户栈顶
+    
+    // a0 寄存器在 trapframe 中是 saved_sscratch 字段
+    proczero.tf->saved_sscratch = 0;              // argc = 0
+    proczero.tf->a1 = 0;                          // argv = 0
+    proczero.tf->a2 = 0;                          // envp = 0
 
-     // map trapframe page into user pagetable (S-only access)
-    vm_mappages(
-        proczero.pgtbl,
-        (uint64)proczero.tf,
-        (uint64)proczero.tf,
-        PGSIZE,
-        PTE_R | PTE_W
-    );
+    printf("  user entry: epc=%p, usp=%p, a0=%ld\n", 
+           (void*)proczero.tf->user_to_kern_epc, 
+           (void*)proczero.tf->sp,
+           proczero.tf->saved_sscratch);
 
-    // map kernel stack page into user pagetable (S-only access)
-    vm_mappages(
-        proczero.pgtbl,
-        (uint64)proczero.kstack,
-        (uint64)proczero.kstack,
-        PGSIZE,
-        PTE_R | PTE_W
-    );
-
-    // 8) 切换到 proczero
+    // 9. 切换到第一个进程
     cpu_t *c = mycpu();
     c->proc = &proczero;
 
-    printf("[proc] switch to user: epc=%p, usp=%p, ksp=%p\n",
-       (void*)proczero.tf->user_to_kern_epc,
-       (void*)proczero.tf->sp,
-       (void*)(proczero.kstack + PGSIZE));
-
-
+    printf("[proc_make_first] switching to user process...\n");
+    
+    // 保存调试信息
+    printf("  c->ctx.ra=%p, proc->ctx.ra=%p\n", 
+           (void*)c->ctx.ra, (void*)proczero.ctx.ra);
+    
     swtch(&c->ctx, &proczero.ctx);
-
-    // swtch 返回到这里时，说明 proczero 让出了CPU（本实验阶段通常不会回来）
+    
+    // 如果回到这里，说明出错了
+    printf("[proc_make_first] ERROR: returned from swtch!\n");
+    panic("should not return from first user process");
 }

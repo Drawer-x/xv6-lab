@@ -68,19 +68,19 @@ void timer_interrupt_handler(void)
     // bump global ticks
     spinlock_acquire(&sys_total_timer.lk);
     sys_total_timer.total_ticks++;
-    uint64 now_total = sys_total_timer.total_ticks;
+    //uint64 now_total = sys_total_timer.total_ticks;
     spinlock_release(&sys_total_timer.lk);
 
     // bump per-cpu ticks
     spinlock_acquire(&sys_timer[cpuid].lk);
     sys_timer[cpuid].ticks++;
-    uint64 hart_ticks = sys_timer[cpuid].ticks;
+    //uint64 hart_ticks = sys_timer[cpuid].ticks;
     spinlock_release(&sys_timer[cpuid].lk);
 
     // *** DEBUG PRINT so we SEE timer interrupts actually happening ***
     // this should show up even while user code is running
-    printf("TIMER TICK: cpu=%d hart_ticks=%lu total=%lu\n",
-           cpuid, hart_ticks, now_total);
+    // printf("TIMER TICK: cpu=%d hart_ticks=%lu total=%lu\n",
+    //        cpuid, hart_ticks, now_total);
 
     // clear SSIP (software interrupt pending bit for S-mode, bit1 of sip)
     // this acknowledges the "timer interrupt" we synthesized in timer_vector

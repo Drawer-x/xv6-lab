@@ -35,7 +35,7 @@ static void return_to_user(proc_t *p)
     sfence_vma();
 
     // 开中断 + 保留 S 态中断使能
-    w_sstatus(r_sstatus() | SSTATUS_SPIE | SSTATUS_SUM);
+    w_sstatus(r_sstatus() | SSTATUS_SPIE);
 
     // sepc 已经在外面写好了
 }
@@ -47,8 +47,11 @@ void trap_user_handler(void)
     uint64 sepc   = r_sepc();
     uint64 stval  = r_stval();   // 出错的地址（page fault 的时候用）
 
+    printf("[trap_user] scause=0x%lx sepc=0x%lx stval=0x%lx\n", 
+        scause, sepc, stval);
+    
     proc_t *p = myproc();
-    trapframe_t *tf = p->tf;
+    printf("[trap_user] proc tf=%p pgtbl=%p\n", p->tf, p->pgtbl);
 
     if (scause & (1ULL << 63))
     {
@@ -59,7 +62,7 @@ void trap_user_handler(void)
         if (code == 5 || code == 1)
         {
             // S-mode timer interrupt / software interrupt
-            uart_putc_sync('T');
+            //uart_putc_sync('T');
             timer_interrupt_handler();
 
             // 回到原PC
@@ -88,6 +91,9 @@ void trap_user_handler(void)
             // ecall from U
             uart_putc_sync('E');
 
+            // 添加系统调用号调试
+            uint64 syscall_num = p->tf->a7;
+            printf("[usertrap] syscall %d\n", (int)syscall_num);
             // ecall 会让 sepc 指向 ecall 本身，要在进 sys 前 +4
             w_sepc(sepc + 4);
 
