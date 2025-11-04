@@ -8,4 +8,4 @@ void proc_make_first();
 // 用户地址空间布局
 #define USER_CODE_VA    0x0000000000001000  // 代码起始地址
 #define USER_HEAP_TOP   0x0000000000009000  // 堆顶（栈底）
-#define USER_STACK_TOP  0x000000000000a000  // 栈顶
+
