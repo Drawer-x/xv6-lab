@@ -3,6 +3,7 @@
 #include "../lock/method.h"
 #include "../arch/method.h"
 #include "../lib/mod.h"
+#include "../lib/method.h"
 
 // ====================================================
 // 内核 Trap Handler：S-mode 层中断与异常处理
@@ -75,6 +76,9 @@ void trap_kernel_inithart(void)
 
     // 1. 设置 S 态 trap 向量到 kernel_vector
     w_stvec((uint64)kernel_vector);
+    // 为当前 CPU 分配中断上下文缓冲区（静态内存，确保对齐）
+    static char mscratch_buf[256] __attribute__((aligned(16)));
+    w_mscratch((uint64)mscratch_buf);  // 初始化 mscratch 指向合法缓冲区
 
     // 2. 开启 S 态中断（软件/时钟/外部）
     uint64 sie_val = r_sie();
@@ -88,9 +92,14 @@ void trap_kernel_inithart(void)
     sstatus_val |= SSTATUS_SIE;
     w_sstatus(sstatus_val);
 
-    // 调试输出
-    printf("[trap_kernel_inithart] stvec=%p sie=0x%lx sstatus=0x%lx\n",
-           kernel_vector, r_sie(), r_sstatus());
+    // 调试输出（保留，初始化阶段非中断上下文）
+    uart_puts("[trap_kernel_inithart] stvec=");
+    uart_puthex((uint64)kernel_vector);  // 打印指针（转为uint64）
+    uart_puts(" sie=0x");
+    uart_puthex(r_sie());                // 打印sie寄存器（uint64）
+    uart_puts(" sstatus=0x");
+    uart_puthex(r_sstatus());            // 打印sstatus寄存器（uint64）
+    uart_puts("\n");                     // 换行
 }
 
 // ====================================================
@@ -105,7 +114,9 @@ void external_interrupt_handler(void)
         plic_complete(irq);  // 必须 complete 否则 IRQ 会一直 pending
 
     } else if (irq != 0) {
-        printf("unexpected external interrupt: irq=%d\n", irq);
+        uart_puts("unexpected external interrupt: irq=");
+        uart_putint(irq);
+        uart_puts("\n");
         plic_complete(irq);
     }
 }
@@ -139,9 +150,17 @@ void trap_kernel_handler(void)
             break;
 
         default:
-            printf("[trap_kernel_handler] unexpected interrupt code=%lu\n", code);
-            printf("sepc=%p stval=%p scause=%lx\n",
-                   (void *)sepc, (void *)stval, scause);
+            uart_puts("[trap_kernel_handler] unexpected interrupt code=");
+            uart_putint(code);
+            uart_puts("\n");
+            
+            uart_puts("sepc=");
+            uart_puthex((uint64)sepc);
+            uart_puts(" stval=");
+            uart_puthex((uint64)stval);
+            uart_puts(" scause=");
+            uart_puthex(scause);
+            uart_puts("\n");
             break;
         }
 
@@ -151,19 +170,31 @@ void trap_kernel_handler(void)
         // ----------------------
         switch (code) {
         case 8:  // ecall from U-mode
-            printf("[S-trap] ecall from user @ sepc=%p\n", (void *)sepc);
+            uart_puts("[S-trap] ecall from user @ sepc=");
+            uart_puthex((uint64)sepc);
+            uart_puts("\n");
             w_sepc(sepc + 4);  // 跳过 ecall
             break;
 
         case 9:  // ecall from S-mode
-            printf("[S-trap] ecall from supervisor @ sepc=%p\n", (void *)sepc);
+            uart_puts("[S-trap] ecall from supervisor @ sepc=");
+            uart_puthex((uint64)sepc);
+            uart_puts("\n");
             w_sepc(sepc + 4);
             break;
 
         default:
-            printf("[trap_kernel_handler] unexpected exception code=%lu\n", code);
-            printf("sepc=%p stval=%p scause=%lx\n",
-                   (void *)sepc, (void *)stval, scause);
+            uart_puts("[trap_kernel_handler] unexpected exception code=");
+            uart_putint(code);
+            uart_puts("\n");
+            
+            uart_puts("sepc=");
+            uart_puthex((uint64)sepc);
+            uart_puts(" stval=");
+            uart_puthex((uint64)stval);
+            uart_puts(" scause=");
+            uart_puthex(scause);
+            uart_puts("\n");
             panic("unhandled trap in S-mode");
         }
     }

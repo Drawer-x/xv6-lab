@@ -47,7 +47,7 @@ pte_t *vm_getpte(pgtbl_t pgtbl, uint64 va, bool alloc)
 }
 
 // 在 pgtbl 中建立 [va,va+len) -> [pa,pa+len) 的映射（叶子 PTE 权限为 perm）
-void vm_mappages(pgtbl_t pgtbl, uint64 va, uint64 pa, uint64 len, int perm)
+int vm_mappages(pgtbl_t pgtbl, uint64 va, uint64 pa, uint64 len, int perm)
 {
     vm_check_page_aligned(va, pa, len);
     uint64 end = va + len;
@@ -59,6 +59,7 @@ void vm_mappages(pgtbl_t pgtbl, uint64 va, uint64 pa, uint64 len, int perm)
         va += PGSIZE;
         pa += PGSIZE;
     }
+    return 0;
 }
 
 // 解除 [va,va+len) 的映射；freeit=true 时释放对应物理页（通常用于用户页）

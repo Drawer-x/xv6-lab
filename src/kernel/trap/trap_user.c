@@ -1,4 +1,3 @@
-// src/kernel/trap/trap_user.c
 #include "mod.h"
 #include "../lib/method.h"
 #include "../mem/method.h"
@@ -47,11 +46,20 @@ void trap_user_handler(void)
     uint64 sepc   = r_sepc();
     uint64 stval  = r_stval();   // 出错的地址（page fault 的时候用）
 
-    printf("[trap_user] scause=0x%lx sepc=0x%lx stval=0x%lx\n", 
-        scause, sepc, stval);
+    uart_puts("[trap_user] scause=0x");
+    uart_puthex(scause);
+    uart_puts(" sepc=0x");
+    uart_puthex(sepc);
+    uart_puts(" stval=0x");
+    uart_puthex(stval);
+    uart_puts("\n");
     
     proc_t *p = myproc();
-    printf("[trap_user] proc tf=%p pgtbl=%p\n", p->tf, p->pgtbl);
+    uart_puts("[trap_user] proc tf=");
+    uart_puthex((uint64)p->tf);
+    uart_puts(" pgtbl=");
+    uart_puthex((uint64)p->pgtbl);
+    uart_puts("\n");
 
     if (scause & (1ULL << 63))
     {
@@ -76,7 +84,9 @@ void trap_user_handler(void)
         }
         else
         {
-            printf("[usertrap] unexpected S interrupt code=%d\n", (int)code);
+            uart_puts("[usertrap] unexpected S interrupt code=");
+            uart_putint(code);
+            uart_puts("\n");
             w_sepc(sepc);
         }
     }
@@ -93,7 +103,9 @@ void trap_user_handler(void)
 
             // 添加系统调用号调试
             uint64 syscall_num = p->tf->a7;
-            printf("[usertrap] syscall %d\n", (int)syscall_num);
+            uart_puts("[usertrap] syscall ");
+            uart_putint(syscall_num);
+            uart_puts("\n");
             // ecall 会让 sepc 指向 ecall 本身，要在进 sys 前 +4
             w_sepc(sepc + 4);
 
@@ -106,7 +118,9 @@ void trap_user_handler(void)
             uint64 new_npage = uvm_ustack_grow(p->pgtbl, p->ustack_npage, stval);
             if (new_npage == (uint64)-1)
             {
-                printf("[usertrap] bad user stack grow: stval=%p\n", (void *)stval);
+                uart_puts("[usertrap] bad user stack grow: stval=");
+                uart_puthex((uint64)(void *)stval);
+                uart_puts("\n");
                 panic("user stack grow failed");
             }
             p->ustack_npage = new_npage;
@@ -116,8 +130,13 @@ void trap_user_handler(void)
         }
         else
         {
-            printf("[usertrap] unhandled sync scause=0x%lx sepc=0x%lx stval=0x%lx\n",
-                   scause, sepc, stval);
+            uart_puts("[usertrap] unhandled sync scause=0x");
+            uart_puthex(scause);
+            uart_puts(" sepc=0x");
+            uart_puthex(sepc);
+            uart_puts(" stval=0x");
+            uart_puthex(stval);
+            uart_puts("\n");
             panic("unhandled user exception");
         }
     }

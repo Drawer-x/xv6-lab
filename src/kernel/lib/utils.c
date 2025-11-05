@@ -24,11 +24,16 @@ void memmove(void *dst, const void *src, uint32 n)
 // 字符串p的前n个字符与q做比较
 // 按照ASCII码大小逐个比较
 // 相同返回0 大于或小于返回正数或负数
-int strncmp(const char *p, const char *q, uint32 n)
-{
-    while (n > 0 && *p && *p == *q)
-        n--, p++, q++;
-    if (n == 0)
-        return 0;
-    return (uint8)*p - (uint8)*q;
+int strncmp(const char *p, const char *q, uint32 n) {
+    // 检查参数合法性，避免访问非法内存
+    if (p == NULL || q == NULL) {
+        uart_puts("strncmp: invalid pointer (p or q is NULL)\n");
+        return -1;
+    }
+    while (n > 0 && *p && *p == *q) {
+        n--;
+        p++;
+        q++;
+    }
+    return (n == 0) ? 0 : ((uint8)*p - (uint8)*q);
 }

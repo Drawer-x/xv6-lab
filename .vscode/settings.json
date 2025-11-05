@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "mod.h": "c",
-        "method.h": "c"
+        "method.h": "c",
+        "type.h": "c"
     }
 }

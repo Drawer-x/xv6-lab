@@ -13,7 +13,10 @@ void uart_init(void);
 void uart_putc_sync(int c);
 int uart_getc_sync(void);
 void uart_intr(void);
-
+// UART 打印函数声明
+void uart_puts(const char *s);
+void uart_putint(int num);
+void uart_puthex(uint64 addr);
 /* cpu.c: 获得CPU信息 */
 
 int mycpuid(void);

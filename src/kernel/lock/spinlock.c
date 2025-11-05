@@ -74,14 +74,12 @@ void spinlock_acquire(spinlock_t *lk)
 // 释放自旋锁
 void spinlock_release(spinlock_t *lk)
 {
-    // // 检查是否持有锁
-    // if (!spinlock_holding(lk)) {
-    //     panic("spinlock_release: not holding\n");
-    // }
     // 在修改任何状态之前检查是否持有锁
     int cpuid = mycpuid();
+    printf("acquire lock %s on cpu %d\n", lk->name, cpuid);
     if (lk->cpuid != cpuid || lk->locked == 0) {
-        panic("spinlock_release: not holding\n");
+        uart_puts("spinlock_release: not holding\n");  // 无锁打印
+        while (1);  // 死循环挂起，避免递归
     }
     lk->cpuid = -1;  // 重置为-1表示未持有
 

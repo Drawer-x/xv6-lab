@@ -123,12 +123,23 @@ void printf(const char *fmt, ...)
 volatile int panicked = 0;
 
 /* 报错并终止输出 */
-void panic(const char *s)
-{
-    printf("panic! %s\n", s);
-    panicked = 1;
-    while (1)
-        ;
+void panic(const char *s) {
+    panicked = 1;  // 标记panic状态，防止嵌套调用
+
+    // 直接通过UART硬件打印，不经过任何带锁函数
+    uart_puts("\nKERNEL PANIC!\n");
+    uart_puts("Error: ");
+    if (s && s[0] != '\0') {
+        uart_puts(s);  // 输出错误信息（确保s是合法字符串）
+    } else {
+        uart_puts("invalid error message");  // 处理空/非法指针
+    }
+    uart_puts("\n");
+
+    // 死循环挂起，避免继续执行破坏内存
+    while (1) {
+        asm volatile("ebreak");  // 触发调试断点，方便GDB捕获
+    }
 }
 
 /* 如果不满足条件, 则调用panic */

@@ -11,28 +11,32 @@ extern void timer_vector();
 
 // each hart's mscratch scratchpad for M-mode timer_vector
 static uint64 mscratch[NCPU][5] = {0};
-
 void timer_init()
 {
+    // 获取当前cpuid
     int hartid = r_tp();
 
-    volatile uint64 *mtime    = (volatile uint64 *)CLINT_MTIME;
-    volatile uint64 *mtimecmp = (volatile uint64 *)CLINT_MTIMECMP(hartid);
-    *mtimecmp = *mtime + INTERVAL;
+    // 设置初始值 cmp_time = cur_time + time_interval
+    *(uint64*)CLINT_MTIMECMP(hartid) = *(uint64*)CLINT_MTIME + INTERVAL;
 
-    uint64 *cur = mscratch[hartid];
-    cur[3] = (uint64)mtimecmp;
-    cur[4] = INTERVAL;
+    // cur_mscratch 指向当前CPU的msrcatch数组
+    uint64* cur_mscratch = mscratch[hartid];
 
-    w_mscratch((uint64)cur);
+    // cur_mscratch[1] [2] [3]先空着, 在trap.S里使用
+    cur_mscratch[3] = CLINT_MTIMECMP(hartid); // cmp_time
+    cur_mscratch[4] = INTERVAL;               // interval
+
+    // 存放到临时寄存器, 便于与trap.S中的timer_vector协作
+    w_mscratch((uint64)cur_mscratch);
+
+    // 设置 M-mode 中断处理函数
     w_mtvec((uint64)timer_vector);
 
-    w_mie(r_mie() | MIE_MTIE);
+    // 打开 M-mode 中断总开关
     w_mstatus(r_mstatus() | MSTATUS_MIE);
 
-    // ✅ 打印调试信息
-    printf("[dbg] timer_init: hart=%d, mtime=%p, mtimecmp=%p, interval=%lu\n",
-           hartid, mtime, mtimecmp, INTERVAL);
+    // 打开 M-mode 时钟中断分开关
+    w_mie(r_mie() | MIE_MTIE);
 }
 
 
@@ -76,14 +80,6 @@ void timer_interrupt_handler(void)
     sys_timer[cpuid].ticks++;
     //uint64 hart_ticks = sys_timer[cpuid].ticks;
     spinlock_release(&sys_timer[cpuid].lk);
-
-    // *** DEBUG PRINT so we SEE timer interrupts actually happening ***
-    // this should show up even while user code is running
-    // printf("TIMER TICK: cpu=%d hart_ticks=%lu total=%lu\n",
-    //        cpuid, hart_ticks, now_total);
-
-    // clear SSIP (software interrupt pending bit for S-mode, bit1 of sip)
-    // this acknowledges the "timer interrupt" we synthesized in timer_vector
     w_sip(r_sip() & ~2ULL);
 }
 
