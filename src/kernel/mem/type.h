@@ -14,7 +14,8 @@
 
 // 物理页是最基本的资源单位, 大小设置为4KB
 #define PGSIZE 4096
-
+// src/kernel/type.h
+#define KERNBASE 0x80000000  // 与链接脚本中的内核起始地址一致
 // 用户栈顶虚拟地址（栈的最高地址，栈从这里向下增长）
 #define USER_STACK_TOP 0x000000000000A000
 

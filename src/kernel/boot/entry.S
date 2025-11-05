@@ -8,6 +8,9 @@ _entry:
     addi    a1, a1, 1
     mul     a0, a0, a1
     add     sp, sp, a0
+    # 关键：在 M 模式下设置 mscratch 指向 mscratch_buf
+    la t0, mscratch_buf          # t0 = &mscratch_buf（加载缓冲区地址）
+    csrw mscratch, t0            # mscratch = t0（写入 M 模式寄存器）
 
     # ===== 新增：M -> S 委派设置 =====
     # 委派用户态异常：U-ECALL(8)、Load/PageFault(13,15)

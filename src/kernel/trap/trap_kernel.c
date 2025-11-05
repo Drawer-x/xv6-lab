@@ -55,7 +55,8 @@ extern void kernel_vector(void);
 // 供 handler 使用的外设/时钟中断处理函数
 void external_interrupt_handler(void);
 void timer_interrupt_handler(void);
-
+// 在 trap_kernel.c 顶部添加（全局变量）
+char mscratch_buf[256] __attribute__((aligned(16)));  // 对齐16字节，满足硬件要求
 // ====================================================
 // 初始化
 // ====================================================
@@ -77,7 +78,6 @@ void trap_kernel_inithart(void)
     // 1. 设置 S 态 trap 向量到 kernel_vector
     w_stvec((uint64)kernel_vector);
     // 为当前 CPU 分配中断上下文缓冲区（静态内存，确保对齐）
-    static char mscratch_buf[256] __attribute__((aligned(16)));
     w_mscratch((uint64)mscratch_buf);  // 初始化 mscratch 指向合法缓冲区
 
     // 2. 开启 S 态中断（软件/时钟/外部）
@@ -169,6 +169,16 @@ void trap_kernel_handler(void)
         // 同步异常 (exception)
         // ----------------------
         switch (code) {
+        case 2:  // 加载故障（Load Fault）
+            uart_puts("[trap_kernel_handler] Load Fault (code=2): ");
+            uart_puts("访问了非法地址 ");
+            uart_puthex(stval);  // stval是触发故障的虚拟地址（如0x0）
+            uart_puts("\n");
+            uart_puts("故障发生在指令地址: ");
+            uart_puthex(sepc);  // sepc是触发故障的指令地址
+            uart_puts("\n");
+            panic("内核态加载故障，请检查非法地址访问");
+    break;
         case 8:  // ecall from U-mode
             uart_puts("[S-trap] ecall from user @ sepc=");
             uart_puthex((uint64)sepc);

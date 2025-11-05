@@ -38,7 +38,7 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 	else echo "-s -p $(GDBPORT)"; fi)
 
 # 生成GDB初始化文件
-.gdbinit: .gdbinit.tmpl-riscv
+.gdbinit: .gdbinit.tmp-riscv
 	sed "s/:1234/:$(GDBPORT)/" < $^ > $@
 
 # 创建输出目录结构（如果不存在）
