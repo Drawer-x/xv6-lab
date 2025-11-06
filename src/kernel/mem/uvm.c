@@ -18,17 +18,16 @@ uvm_va2pa(pgtbl_t pgtbl, uint64 va)
 
 // 用户态地址空间[src, src+len) 拷贝至 内核态地址空间[dst, dst+len)
 // 注意: src dst 不一定是 page-aligned
-void uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len)
-{
-    while (len > 0)
-    {
+// 修改后：返回 0 成功，-1 失败
+int uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len) {
+    while (len > 0) {
         uint64 pa = uvm_va2pa(pgtbl, src);
-        assert(pa != 0, "uvm_copyin: invalid user va");
+        if (pa == 0) { // 地址无效
+            return -1;
+        }
 
-        // 当前这一页还能用多少
         uint32 n = PGSIZE - (src & (PGSIZE - 1));
-        if (n > len)
-            n = len;
+        if (n > len) n = len;
 
         memmove((void *)dst, (const void *)pa, n);
 
@@ -36,20 +35,21 @@ void uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len)
         src += n;
         len -= n;
     }
+    return 0;
 }
 
 // 内核态地址空间[src, src+len） 拷贝至 用户态地址空间[dst, dst+len)
 // 注意: src dst 不一定是 page-aligned
-void uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len)
-{
-    while (len > 0)
-    {
+// 修改后：返回 0 成功，-1 失败
+int uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len) {
+    while (len > 0) {
         uint64 pa = uvm_va2pa(pgtbl, dst);
-        assert(pa != 0, "uvm_copyout: invalid user va");
+        if (pa == 0) { // 地址无效
+            return -1;
+        }
 
         uint32 n = PGSIZE - (dst & (PGSIZE - 1));
-        if (n > len)
-            n = len;
+        if (n > len) n = len;
 
         memmove((void *)pa, (const void *)src, n);
 
@@ -57,22 +57,22 @@ void uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len)
         src += n;
         len -= n;
     }
+    return 0;
 }
 
 // 用户态地址空间的字符串(src) 拷贝到 内核态(dst)
 // 最多拷贝 maxlen 个字节，保证以 '\0' 结束
-void uvm_copyin_str(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 maxlen)
-{
+// 修改后：返回实际复制的字节数（不含终止符），-1 失败
+int uvm_copyin_str(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 maxlen) {
     uint32 copied = 0;
-    while (copied < maxlen)
-    {
+    while (copied < maxlen) {
         uint64 pa = uvm_va2pa(pgtbl, src);
-        assert(pa != 0, "uvm_copyin_str: invalid user va");
+        if (pa == 0) { // 地址无效
+            return -1;
+        }
 
-        // 这次这一页还能用多少
         uint32 n = PGSIZE - (src & (PGSIZE - 1));
-        while (n > 0 && copied < maxlen)
-        {
+        while (n > 0 && copied < maxlen) {
             char c = *(char *)pa;
             *(char *)dst = c;
 
@@ -81,16 +81,17 @@ void uvm_copyin_str(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 maxlen)
             src++;
             copied++;
 
-            if (c == '\0')
-                return;
+            if (c == '\0') {
+                return copied - 1; // 不含终止符
+            }
 
             n--;
         }
     }
 
-    // 如果跑到这里，说明用户串没在 maxlen 范围内结束
-    // 我们还是给个 '\0'，避免内核后面打印爆掉
+    // 强制添加终止符
     ((char *)dst)[-1] = '\0';
+    return copied - 1;
 }
 
 /*--------------------part-2: 用户态 mmap / munmap 逻辑--------------------*/

@@ -17,9 +17,9 @@ void kvm_inithart();
 
 /* uvm.c: 用户态虚拟内存管理 */
 
-void uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len);
-void uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len);
-void uvm_copyin_str(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 maxlen);
+int uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len);
+int uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len);
+int uvm_copyin_str(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 maxlen);
 void uvm_show_mmaplist(mmap_region_t *mmap);
 void uvm_mmap(uint64 begin, uint32 npages, int perm);
 void uvm_munmap(uint64 begin, uint32 npages);
