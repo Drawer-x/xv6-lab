@@ -37,12 +37,12 @@ static void region_build(alloc_region_t *r, uint64 begin, uint64 end, char *name
     }
 }
 
-/* 初始化物理内存 */
 void pmem_init(void) {
     uint64 base   = (uint64)ALLOC_BEGIN;
     uint64 end    = (uint64)ALLOC_END;
     uint64 split  = base + (uint64)KERN_PAGES * PGSIZE;
 
+    // 构建内存区域
     region_build(&kern_region, base, split,  "kern_region");
     region_build(&user_region, split, end,   "user_region");
 }

@@ -62,13 +62,11 @@ char mscratch_buf[256] __attribute__((aligned(16)));  // 对齐16字节，满足
 // ====================================================
 
 // 全局初始化（仅一次）
-void trap_kernel_init(void)
-{
+void trap_kernel_init(void) {
     uart_init();     // 初始化 UART
     plic_init();     // 初始化 PLIC
-    timer_create();  // 创建/启动时钟（M 态中断转发为 S 态软件中断 SSIP）
+    timer_create();  // 创建/启动时钟
 }
-
 // 每个 CPU 的本地初始化
 void trap_kernel_inithart(void)
 {

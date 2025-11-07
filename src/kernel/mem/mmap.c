@@ -22,7 +22,6 @@ void mmap_init()
         node_list[i].mmap.begin  = 0;
         node_list[i].mmap.npages = 0;
         node_list[i].mmap.next   = NULL;
-
         node_list[i].next = list_head.next;
         list_head.next    = &node_list[i];
     }
@@ -54,18 +53,17 @@ mmap_region_t *mmap_region_alloc()
     return &node->mmap;
 }
 
-// 归还一个 mmap_region_t 到仓库
-void mmap_region_free(mmap_region_t *mmap)
-{
-    // 由于 mmap 是 mmap_region_node_t 的第一个字段，
-    // 所以可以直接强转回去
-    mmap_region_node_t *node = (mmap_region_node_t *)mmap;
+/* 释放mmap_region_t节点到仓库 */
+void mmap_region_free(mmap_region_t *mmap) {
+    if (!mmap) return;  // 忽略空指针new
 
+    // 从mmap指针反推节点指针（依赖结构体布局）
+    mmap_region_node_t *node = (mmap_region_node_t *)mmap;
     spinlock_acquire(&list_lk);
 
-    node->next    = list_head.next;
+    // 插入链表头部
+    node->next = list_head.next;
     list_head.next = node;
-
     spinlock_release(&list_lk);
 }
 
