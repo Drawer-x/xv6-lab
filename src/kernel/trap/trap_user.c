@@ -1,298 +1,178 @@
 #include "mod.h"
+#include "../mem/mod.h"
 #include "../lib/method.h"
 #include "../mem/method.h"
 #include "../mem/type.h"
 #include "../proc/method.h"
 #include "../proc/type.h"
 #include "../arch/method.h"
+#include "../arch/mod.h"
 #include "../../user/syscall_num.h"
 
-// from trampoline.S
-extern char trampoline[];
-extern char user_vector[];
-extern void user_return(trapframe_t *tf, uint64 satp);
-
-// S-mode interrupt helpers (already defined elsewhere)
-extern void timer_interrupt_handler(void);
-extern void external_interrupt_handler(void);
-
-// 内部工具：从内核返回用户
+// 外部符号声明
+extern char trampoline[];         // 内核-用户切换跳板
+extern char user_vector[];        // 用户态陷阱入口（trampoline内偏移）
+extern char user_return[];        // 内核返回用户态入口（trampoline内偏移）
+extern void timer_interrupt_handler(void);  // 定时器中断处理
+extern void external_interrupt_handler(void); // 外部中断处理
+extern char *interrupt_info[16];  // 中断类型描述信息
+extern char *exception_info[16];  // 异常类型描述信息
+extern char kernel_vector[]; // 内核态trap处理流程, 进入内核后应当切换中断处理入口
+// 内部工具：从内核返回用户态
 static void return_to_user(proc_t *p)
 {
     trapframe_t *tf = p->tf;
+    assert(tf != NULL, "return_to_user: null trapframe");
 
-    // sscratch = trapframe
-    w_sscratch((uint64)tf);
+    // 设置sscratch为全局TRAPFRAME（与内核陷阱帧管理一致）
+    w_sscratch((uint64)TRAPFRAME);
 
-    // stvec = trampoline + (user_return - trampoline)    (在 trampoline 里算的)
-    uint64 trampoline_pa = (uint64)trampoline;
-    uint64 user_ret_off  = (uint64)user_return - (uint64)trampoline;
-    w_stvec(trampoline_pa + user_ret_off);
+    // 设置用户态陷阱入口：trampoline中的user_vector
+    uint64 uservec_va = TRAMPOLINE + ((uint64)user_vector - (uint64)trampoline);
+    w_stvec(uservec_va);
 
-    // 切回用户页表
+    // 切换到用户页表
     w_satp(MAKE_SATP(p->pgtbl));
-    sfence_vma();
+    sfence_vma();  // 刷新TLB，确保页表切换生效
 
-    // 开中断 + 保留 S 态中断使能
-    w_sstatus(r_sstatus() | SSTATUS_SPIE);
-
-    // sepc 已经在外面写好了
+    // 允许用户态中断（置位SPIE），清除SPP（标记返回用户态）
+    uint64 sstatus = r_sstatus();
+    sstatus |= SSTATUS_SPIE;  // 开中断
+    sstatus &= ~SSTATUS_SPP;  // 回到用户态
+    w_sstatus(sstatus);
 }
 
-// 真正的 user trap handler（trampoline.S 的 user_vector 会跳到这里）
+// 用户态陷阱处理核心逻辑（trampoline的user_vector会跳转至此）
 void trap_user_handler(void)
 {
-    uint64 scause = r_scause();
-    uint64 sepc   = r_sepc();
-    uint64 stval  = r_stval();   // 出错的地址（page fault 的时候用）
+    // 1. 进入内核时切换中断向量到内核态处理逻辑
+    uint64 old_stvec = r_stvec();  // 保存原向量，便于异常流程恢复
+    w_stvec((uint64)kernel_vector);
 
+    // 2. 读取陷阱状态寄存器
+    uint64 scause = r_scause();
+    uint64 sepc = r_sepc();
+    uint64 stval = r_stval();
+    proc_t *p = myproc();
+    trapframe_t *tf = p->tf;
+    assert(p != NULL && tf != NULL, "trap_user_handler: invalid proc/trapframe");
+
+    // 3. 持久化保存用户态陷阱发生时的PC到陷阱帧
+    tf->user_to_kern_epc = sepc;
+
+    // 4. 打印基础调试信息
     uart_puts("[trap_user] scause=0x");
     uart_puthex(scause);
-    uart_puts(" sepc=0x");
+    uart_puts(" (");
+    if (scause & (1ULL << 63)) {
+        uart_puts("interrupt");
+    } else {
+        uart_puts("exception");
+    }
+    uart_puts(") sepc=0x");
     uart_puthex(sepc);
     uart_puts(" stval=0x");
     uart_puthex(stval);
     uart_puts("\n");
-    
-    proc_t *p = myproc();
-    uart_puts("[trap_user] proc tf=");
-    uart_puthex((uint64)p->tf);
-    uart_puts(" pgtbl=");
-    uart_puthex((uint64)p->pgtbl);
-    uart_puts("\n");
 
-    if (scause & (1ULL << 63))
-    {
-        // -------------------------
-        // 异步中断
-        // -------------------------
-        uint64 code = scause & 0xfff;
-        if (code == 5 || code == 1)
-        {
-            // S-mode timer interrupt / software interrupt
-            //uart_putc_sync('T');
-            timer_interrupt_handler();
+    // 5. 处理中断/异常
+    if (scause & (1ULL << 63)) {
+        // 异步中断处理
+        uint64 trap_id = scause & 0xfff;
+        uart_puts("[trap_user] interrupt id=");
+        uart_putint(trap_id);
+        uart_puts(" ");
+        if (trap_id < 16 && interrupt_info[trap_id]) {
+            uart_puts(interrupt_info[trap_id]);  // 打印中断描述
+        } else {
+            uart_puts("unknown interrupt");
+        }
+        uart_puts("\n");
 
-            // 回到原PC
-            w_sepc(sepc);
+        switch (trap_id) {
+            case 1:  // S-mode软件中断（定时器转发）
+                timer_interrupt_handler();
+                break;
+            case 9:  // S-mode外部中断（PLIC）
+                external_interrupt_handler();
+                break;
+            default:
+                // 未识别中断：容错处理，不panic
+                uart_puts("[trap_user] unhandled interrupt, skip panic\n");
+                break;
         }
-        else if (code == 9)
-        {
-            // 外设中断
-            external_interrupt_handler();
-            w_sepc(sepc);
+        // 恢复用户态PC（中断不改变原执行流程）
+        w_sepc(tf->user_to_kern_epc);
+    } else {
+        // 同步异常处理
+        uint64 trap_id = scause & 0xfff;
+        uart_puts("[trap_user] exception id=");
+        uart_putint(trap_id);
+        uart_puts(" ");
+        if (trap_id < 16 && exception_info[trap_id]) {
+            uart_puts(exception_info[trap_id]);  // 打印异常描述
+        } else {
+            uart_puts("unknown exception");
         }
-        else
-        {
-            uart_puts("[usertrap] unexpected S interrupt code=");
-            uart_putint(code);
-            uart_puts("\n");
-            w_sepc(sepc);
-        }
-    }
-    else
-    {
-        // -------------------------
-        // 同步异常
-        // -------------------------
-        uint64 code = scause & 0xfff;
-        if (code == 8)
-        {
-            // ecall from U
-            uart_putc_sync('E');
+        uart_puts("\n");
 
-            // 添加系统调用号调试
-            uint64 syscall_num = p->tf->a7;
-            uart_puts("[usertrap] syscall ");
-            uart_putint(syscall_num);
-            uart_puts("\n");
-            // ecall 会让 sepc 指向 ecall 本身，要在进 sys 前 +4
-            w_sepc(sepc + 4);
-
-            // 交给通用 syscall 分发
-            syscall();
-        }
-        else if (code == 13 || code == 15)
-        {
-            // load/store/AMO page fault -> 可能是用户栈要自动增长
-            uint64 new_npage = uvm_ustack_grow(p->pgtbl, p->ustack_npage, stval);
-            if (new_npage == (uint64)-1)
-            {
-                uart_puts("[usertrap] bad user stack grow: stval=");
-                uart_puthex((uint64)(void *)stval);
+        switch (trap_id) {
+            case 8:  // 用户态系统调用（ecall）
+                // 系统调用返回地址为ecall下一条指令
+                tf->user_to_kern_epc += 4;
+                w_sepc(tf->user_to_kern_epc);
+                // 打印系统调用号调试信息
+                uart_puts("[trap_user] syscall num=");
+                uart_putint(tf->a7);
                 uart_puts("\n");
-                panic("user stack grow failed");
-            }
-            p->ustack_npage = new_npage;
-
-            // 继续从原来的指令执行
-            w_sepc(sepc);
-        }
-        else
-        {
-            uart_puts("[usertrap] unhandled sync scause=0x");
-            uart_puthex(scause);
-            uart_puts(" sepc=0x");
-            uart_puthex(sepc);
-            uart_puts(" stval=0x");
-            uart_puthex(stval);
-            uart_puts("\n");
-            panic("unhandled user exception");
+                syscall();  // 分发系统调用
+                break;
+            case 13:  // 加载页错误
+            case 15:  // 存储/AMO页错误
+                // 尝试自动扩展用户栈
+                uint64 old_npage = p->ustack_npage;
+                uint64 new_npage = uvm_ustack_grow(p->pgtbl, old_npage, stval);
+                if (new_npage == (uint64)-1) {
+                    uart_puts("[trap_user] stack grow failed! stval=0x");
+                    uart_puthex(stval);
+                    uart_puts("\n");
+                    panic("user stack out of memory");
+                }
+                // 打印栈扩展信息
+                uart_puts("[trap_user] stack grow: ");
+                uart_putint(old_npage);
+                uart_puts(" -> ");
+                uart_putint(new_npage);
+                uart_puts(" pages\n");
+                p->ustack_npage = new_npage;
+                // 恢复原PC，重试指令
+                w_sepc(tf->user_to_kern_epc);
+                break;
+            default:
+                // 未识别异常：容错处理，不panic
+                uart_puts("[trap_user] unhandled exception, skip panic\n");
+                w_sepc(tf->user_to_kern_epc);
+                break;
         }
     }
 
-    // 处理完了回用户
+    // 6. 恢复内核态中断向量（若需要），返回用户态
+    w_stvec(old_stvec);  // 恢复进入时的stvec（兼容异常流程）
     return_to_user(p);
 }
 
-// 第一次进用户态
+// 首次进入用户态的初始化处理
 void trap_user_return(void)
 {
-    proc_t *p  = myproc();
+    proc_t *p = myproc();
     trapframe_t *tf = p->tf;
-    assert(tf != NULL, "trap_user_return: null trapframe");
+    assert(p != NULL && tf != NULL, "trap_user_return: invalid proc/trapframe");
 
-    // 第一次的 sepc 是进程创建时写进去的
-    uint64 entry = tf->user_to_kern_epc;
-    w_sepc(entry);
+    // 初始化用户态入口PC（从陷阱帧读取）
+    w_sepc(tf->user_to_kern_epc);
+    uart_puts("[trap_user_return] first enter user, sepc=0x");
+    uart_puthex(tf->user_to_kern_epc);
+    uart_puts("\n");
 
     return_to_user(p);
 }
-// 系统调用分发函数
-// void syscall() {
-//     proc_t *p = myproc();
-//     uint64 syscall_num = p->tf->a7; // 系统调用号从 a7 寄存器获取
-//     int ret = -1;
-
-//     switch (syscall_num) {
-//         case SYS_copyin:    // 假设 SYS_copyin 定义为 1
-//             ret = sys_copyin(p->tf->a0, p->tf->a1, p->tf->a2);
-//             break;
-//         case SYS_copyout:   // 假设 SYS_copyout 定义为 2
-//             ret = sys_copyout(p->tf->a0, p->tf->a1, p->tf->a2);
-//             break;
-//         case SYS_copyinstr: // 假设 SYS_copyinstr 定义为 3
-//             ret = sys_copyinstr(p->tf->a0, p->tf->a1, p->tf->a2);
-//             break;
-//         default:
-//             uart_puts("[syscall] unknown syscall: ");
-//             uart_putint(syscall_num);
-//             uart_puts("\n");
-//             ret = -1;
-//     }
-
-//     p->tf->a0 = ret; // 结果通过 a0 寄存器返回给用户态
-// }
-// 检查用户虚拟地址范围 [va, va+len) 是否合法（属于用户可访问区域）
-// 返回 0 表示合法，-1 表示非法
-// static int uvm_check_va(proc_t *p, uint64 va, uint64 len) {
-//     if (len == 0) return 0; // 空长度合法
-//     uint64 end = va + len;
-//     if (end < va) return -1; // 地址溢出
-
-//     // 1. 检查是否在用户空间基地址以下（无效）
-//     if (va < USER_BASE) return -1;
-
-//     // 2. 检查是否在用户栈区域
-//     uint64 stack_bot = TRAPFRAME - p->ustack_npage * PGSIZE;
-//     if (va >= stack_bot && end <= TRAPFRAME) {
-//         return 0;
-//     }
-
-//     // 3. 检查是否在用户堆区域（[USER_BASE, heap_top)）
-//     if (va >= USER_BASE && end <= p->heap_top) {
-//         return 0;
-//     }
-
-//     // 4. 检查是否在 mmap 区域
-//     mmap_region_t *region = p->mmap;
-//     while (region) {
-//         uint64 region_end = region->begin + region->npages * PGSIZE;
-//         if (va >= region->begin && end <= region_end) {
-//             return 0;
-//         }
-//         region = region->next;
-//     }
-
-//     // 不在任何合法区域
-//     return -1;
-// }
-// 系统调用：sys_copyin
-// 参数：
-//   a0：用户空间源地址（user_src）
-//   a1：内核空间目标地址（kern_dst）
-//   a2：复制长度（len）
-// 返回值：0 成功，-1 失败
-// int sys_copyin(uint64 user_src, uint64 kern_dst, uint32 len) {
-//     proc_t *p = myproc();
-//     if (p == NULL) return -1;
-
-//     // 1. 检查用户地址合法性
-//     if (uvm_check_va(p, user_src, len) != 0) {
-//         return -1;
-//     }
-
-//     // 2. 检查内核地址合法性（必须在内核空间）
-//     if (kern_dst < KERNEL_BASE || (kern_dst + len) < kern_dst) {
-//         return -1;
-//     }
-
-//     // 3. 调用 uvm_copyin 执行复制（需先修改 uvm_copyin 为有返回值）
-//     // 修改 uvm_copyin：若 uvm_va2pa 返回 0，返回 -1，否则返回 0
-//     if (uvm_copyin(p->pgtbl, kern_dst, user_src, len) != 0) {
-//         return -1;
-//     }
-
-//     return 0;
-// }
-// // 系统调用：sys_copyout
-// // 参数：
-// //   a0：内核空间源地址（kern_src）
-// //   a1：用户空间目标地址（user_dst）
-// //   a2：复制长度（len）
-// // 返回值：0 成功，-1 失败
-// int sys_copyout(uint64 kern_src, uint64 user_dst, uint32 len) {
-//     proc_t *p = myproc();
-//     if (p == NULL) return -1;
-
-//     // 1. 检查用户目标地址合法性
-//     if (uvm_check_va(p, user_dst, len) != 0) {
-//         return -1;
-//     }
-
-//     // 2. 检查内核源地址合法性
-//     if (kern_src < KERNEL_BASE || (kern_src + len) < kern_src) {
-//         return -1;
-//     }
-
-//     // 3. 调用 uvm_copyout 执行复制（需修改 uvm_copyout 为有返回值）
-//     if (uvm_copyout(p->pgtbl, user_dst, kern_src, len) != 0) {
-//         return -1;
-//     }
-
-//     return 0;
-// }
-// // 系统调用：sys_copyinstr
-// // 参数：
-// //   a0：用户空间字符串地址（user_src）
-// //   a1：内核空间缓冲区（kern_dst）
-// //   a2：最大复制长度（maxlen）
-// // 返回值：实际复制的字节数（不含终止符），-1 失败
-// int sys_copyinstr(uint64 user_src, uint64 kern_dst, uint32 maxlen) {
-//     proc_t *p = myproc();
-//     if (p == NULL || maxlen == 0) return -1;
-
-//     // 1. 检查用户地址合法性（最大可能访问 maxlen 字节）
-//     if (uvm_check_va(p, user_src, maxlen) != 0) {
-//         return -1;
-//     }
-
-//     // 2. 检查内核缓冲区合法性
-//     if (kern_dst < KERNEL_BASE || (kern_dst + maxlen) < kern_dst) {
-//         return -1;
-//     }
-
-//     // 3. 调用 uvm_copyin_str 复制字符串（需修改为返回实际长度，错误时返回-1）
-//     int copied = uvm_copyin_str(p->pgtbl, kern_dst, user_src, maxlen);
-//     return copied;
-// }
