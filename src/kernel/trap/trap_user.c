@@ -15,8 +15,6 @@ extern char user_vector[];        // 用户态陷阱入口（trampoline内偏移
 extern char user_return[];        // 内核返回用户态入口（trampoline内偏移）
 extern void timer_interrupt_handler(void);  // 定时器中断处理
 extern void external_interrupt_handler(void); // 外部中断处理
-extern char *interrupt_info[16];  // 中断类型描述信息
-extern char *exception_info[16];  // 异常类型描述信息
 extern char kernel_vector[]; // 内核态trap处理流程, 进入内核后应当切换中断处理入口
 // 内部工具：从内核返回用户态
 static void return_to_user(proc_t *p)
@@ -79,15 +77,6 @@ void trap_user_handler(void)
     if (scause & (1ULL << 63)) {
         // 异步中断处理
         uint64 trap_id = scause & 0xfff;
-        uart_puts("[trap_user] interrupt id=");
-        uart_putint(trap_id);
-        uart_puts(" ");
-        if (trap_id < 16 && interrupt_info[trap_id]) {
-            uart_puts(interrupt_info[trap_id]);  // 打印中断描述
-        } else {
-            uart_puts("unknown interrupt");
-        }
-        uart_puts("\n");
 
         switch (trap_id) {
             case 1:  // S-mode软件中断（定时器转发）
@@ -106,15 +95,6 @@ void trap_user_handler(void)
     } else {
         // 同步异常处理
         uint64 trap_id = scause & 0xfff;
-        uart_puts("[trap_user] exception id=");
-        uart_putint(trap_id);
-        uart_puts(" ");
-        if (trap_id < 16 && exception_info[trap_id]) {
-            uart_puts(exception_info[trap_id]);  // 打印异常描述
-        } else {
-            uart_puts("unknown exception");
-        }
-        uart_puts("\n");
 
         switch (trap_id) {
             case 8:  // 用户态系统调用（ecall）

@@ -158,30 +158,35 @@ void kvm_init()
 //     w_mscratch(stack_top);  // mscratch存储内核栈顶
 //     printf("[kvm_inithart] hart initialized. stack_top=%p\n", stack_top);
 // }
-void kvm_inithart() {
-  printf("[kvm_inithart] start\n");  // 第一步打印
-  // 1. 切换到内核页表
-  w_satp(MAKE_SATP(kernel_pgtbl));
-  printf("[kvm_inithart] satp set\n");  // 确认页表切换前的打印
-  sfence_vma();
-  printf("[kvm_inithart] tlb flushed\n");  // 确认TLB刷新
-
-  // 2. 分配内核栈
-  char *kstack = (char*)pmem_alloc(true);
-  assert(kstack != NULL, "kvm_inithart: alloc stack failed");
-  printf("[kvm_inithart] stack allocated at %p\n", kstack);  // 确认栈分配
-
-  uint64 stack_top = (uint64)kstack + PGSIZE;
-  w_mscratch(stack_top);
-  // 读写栈顶下方的地址（测试栈访问）
-  *(uint64*)(stack_top - 8) = 0x12345678;  // 向栈压入一个值
-  uint64 test = *(uint64*)(stack_top - 8);  // 从栈读出
-  if (test != 0x12345678) {
-    panic("stack access failed");  // 若失败，打印错误
-  }
-  printf("[kvm_inithart] stack test passed. stack_top=%p\n", stack_top);
-  printf("[kvm_inithart] hart initialized. stack_top=%p\n", stack_top);
+void kvm_inithart()
+{
+    w_satp(MAKE_SATP(kernel_pgtbl));
+    sfence_vma();
 }
+// void kvm_inithart() {
+//   printf("[kvm_inithart] start\n");  // 第一步打印
+//   // 1. 切换到内核页表
+//   w_satp(MAKE_SATP(kernel_pgtbl));
+//   printf("[kvm_inithart] satp set\n");  // 确认页表切换前的打印
+//   sfence_vma();
+//   printf("[kvm_inithart] tlb flushed\n");  // 确认TLB刷新
+
+//   // 2. 分配内核栈
+//   char *kstack = (char*)pmem_alloc(true);
+//   assert(kstack != NULL, "kvm_inithart: alloc stack failed");
+//   printf("[kvm_inithart] stack allocated at %p\n", kstack);  // 确认栈分配
+
+//   uint64 stack_top = (uint64)kstack + PGSIZE;
+//   w_mscratch(stack_top);
+//   // 读写栈顶下方的地址（测试栈访问）
+//   *(uint64*)(stack_top - 8) = 0x12345678;  // 向栈压入一个值
+//   uint64 test = *(uint64*)(stack_top - 8);  // 从栈读出
+//   if (test != 0x12345678) {
+//     panic("stack access failed");  // 若失败，打印错误
+//   }
+//   printf("[kvm_inithart] stack test passed. stack_top=%p\n", stack_top);
+//   printf("[kvm_inithart] hart initialized. stack_top=%p\n", stack_top);
+// }
 
 // -----------------------------------------------------------------------------
 // Debug：输出页表内容（三级页表）
