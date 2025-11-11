@@ -8,4 +8,5 @@ target/kernel/main.o: src/kernel/main.c src/kernel/arch/mod.h \
  src/kernel/mem/../trap/mod.h src/kernel/mem/../trap/type.h \
  src/kernel/mem/../trap/method.h src/kernel/mem/../trap/../syscall/mod.h \
  src/kernel/mem/../trap/../syscall/type.h \
- src/kernel/mem/../trap/../syscall/method.h src/kernel/proc/mod.h
+ src/kernel/mem/../trap/../syscall/method.h src/kernel/proc/mod.h \
+ src/kernel/proc/method.h

@@ -20,7 +20,7 @@ void syscall()
         printf("unknown syscall %d from pid = %d\n", sys_num, p->pid);
         panic("syscall");
     } else {
-        p->tf->a1 = syscalls[sys_num]();
+        p->tf->a0 = syscalls[sys_num]();
     }
 }
 
@@ -39,17 +39,17 @@ static uint64 arg_raw(int n)
     switch (n)
     {
     case 0:
-        return proc->tf->a1;
+        return proc->tf->a0;
     case 1:
-        return proc->tf->a2;
+        return proc->tf->a1;
     case 2:
-        return proc->tf->a3;
+        return proc->tf->a2;
     case 3:
-        return proc->tf->a4;
+        return proc->tf->a3;
     case 4:
-        return proc->tf->a5;
+        return proc->tf->a4;
     case 5:
-        return proc->tf->a6;
+        return proc->tf->a5;
     default:
         panic("arg_raw: illegal arg num");
         return -1;

@@ -3,95 +3,117 @@
 
 /*--------------------part-1: 关于内核空间<->用户空间的数据传递--------------------*/
 
-// 一个小工具：从用户页表查出某个用户VA对应的PA
-// 查不到就返回0
-static inline uint64
-uvm_va2pa(pgtbl_t pgtbl, uint64 va)
-{
-    pte_t *pte = vm_getpte(pgtbl, va, false);
-    if (pte == NULL || (*pte & PTE_V) == 0)
-        return 0;
-    uint64 pa = PTE_TO_PA(*pte);
-    pa |= (va & (PGSIZE - 1));    // 补上页内偏移
-    return pa;
-}
-
 // 用户态地址空间[src, src+len) 拷贝至 内核态地址空间[dst, dst+len)
 // 注意: src dst 不一定是 page-aligned
-// 修改后：返回 0 成功，-1 失败
-int uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len) {
-    while (len > 0) {
-        uint64 pa = uvm_va2pa(pgtbl, src);
-        if (pa == 0) { // 地址无效
-            return -1;
+void uvm_copyin(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len)
+{
+    uint64 n = 0;
+    while (n < len) {
+        // 获取当前用户虚拟地址对应的页表项
+        uint64 va = src + n;
+        pte_t *pte = vm_getpte(pgtbl, va, false);
+        
+        // 检查页表项是否有效且可读
+        if (pte == NULL || !(*pte & PTE_V) || !(*pte & PTE_R)) {
+            panic("uvm_copyin: invalid address");
         }
-
-        uint32 n = PGSIZE - (src & (PGSIZE - 1));
-        if (n > len) n = len;
-
-        memmove((void *)dst, (const void *)pa, n);
-
-        dst += n;
-        src += n;
-        len -= n;
+        
+        // 获取物理地址
+        uint64 pa = PTE_TO_PA(*pte);
+        
+        // 计算当前页内偏移
+        uint64 offset = va % PGSIZE;
+        
+        // 计算本次能拷贝的字节数（不能跨页）
+        uint64 copy_len = PGSIZE - offset;
+        if (copy_len > len - n) {
+            copy_len = len - n;
+        }
+        
+        // 从用户物理地址拷贝到内核虚拟地址
+        memmove((void *)(dst + n), (void *)(pa + offset), copy_len);
+        
+        n += copy_len;
     }
-    return 0;
 }
 
 // 内核态地址空间[src, src+len） 拷贝至 用户态地址空间[dst, dst+len)
 // 注意: src dst 不一定是 page-aligned
-// 修改后：返回 0 成功，-1 失败
-int uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len) {
-    while (len > 0) {
-        uint64 pa = uvm_va2pa(pgtbl, dst);
-        if (pa == 0) { // 地址无效
-            return -1;
+void uvm_copyout(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 len)
+{
+    uint64 n = 0;
+    while (n < len) {
+        // 获取当前用户虚拟地址对应的页表项
+        uint64 va = dst + n;
+        pte_t *pte = vm_getpte(pgtbl, va, false);
+        
+        // 检查页表项是否有效且可写
+        if (pte == NULL || !(*pte & PTE_V) || !(*pte & PTE_W)) {
+            panic("uvm_copyout: invalid address");
         }
-
-        uint32 n = PGSIZE - (dst & (PGSIZE - 1));
-        if (n > len) n = len;
-
-        memmove((void *)pa, (const void *)src, n);
-
-        dst += n;
-        src += n;
-        len -= n;
+        
+        // 获取物理地址
+        uint64 pa = PTE_TO_PA(*pte);
+        
+        // 计算当前页内偏移
+        uint64 offset = va % PGSIZE;
+        
+        // 计算本次能拷贝的字节数（不能跨页）
+        uint64 copy_len = PGSIZE - offset;
+        if (copy_len > len - n) {
+            copy_len = len - n;
+        }
+        
+        // 从内核虚拟地址拷贝到用户物理地址
+        memmove((void *)(pa + offset), (void *)(src + n), copy_len);
+        
+        n += copy_len;
     }
-    return 0;
 }
 
-// 用户态地址空间的字符串(src) 拷贝到 内核态(dst)
-// 最多拷贝 maxlen 个字节，保证以 '\0' 结束
-// 修改后：返回实际复制的字节数（不含终止符），-1 失败
-int uvm_copyin_str(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 maxlen) {
-    uint32 copied = 0;
-    while (copied < maxlen) {
-        uint64 pa = uvm_va2pa(pgtbl, src);
-        if (pa == 0) { // 地址无效
-            return -1;
+// 用户态字符串拷贝到内核态
+// 最多拷贝maxlen字节, 中途遇到'\0'则终止
+// 注意: src dst 不一定是 page-aligned
+void uvm_copyin_str(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 maxlen)
+{
+    uint64 n = 0;
+    bool found_end = false;
+    
+    while (n < maxlen && !found_end) {
+        // 获取当前用户虚拟地址对应的页表项
+        uint64 va = src + n;
+        pte_t *pte = vm_getpte(pgtbl, va, false);
+        
+        // 检查页表项是否有效且可读
+        if (pte == NULL || !(*pte & PTE_V) || !(*pte & PTE_R)) {
+            panic("uvm_copyin_str: invalid address");
         }
-
-        uint32 n = PGSIZE - (src & (PGSIZE - 1));
-        while (n > 0 && copied < maxlen) {
-            char c = *(char *)pa;
-            *(char *)dst = c;
-
-            dst++;
-            pa++;
-            src++;
-            copied++;
-
+        
+        // 获取物理地址
+        uint64 pa = PTE_TO_PA(*pte);
+        
+        // 计算当前页内偏移
+        uint64 offset = va % PGSIZE;
+        
+        // 逐字节拷贝，直到遇到 '\0' 或页面结束或达到最大长度
+        while (offset < PGSIZE && n < maxlen) {
+            char c = *((char *)(pa + offset));
+            *((char *)(dst + n)) = c;
+            
             if (c == '\0') {
-                return copied - 1; // 不含终止符
+                found_end = true;
+                break;
             }
-
-            n--;
+            
+            n++;
+            offset++;
         }
     }
-
-    // 强制添加终止符
-    ((char *)dst)[-1] = '\0';
-    return copied - 1;
+    
+    // 确保字符串以 '\0' 结尾
+    if (n >= maxlen) {
+        *((char *)(dst + maxlen - 1)) = '\0';
+    }
 }
 
 /*--------------------part-2: 用户态 mmap / munmap 逻辑--------------------*/

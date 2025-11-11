@@ -75,7 +75,7 @@ $(ELFKernel): $(KernelOBJ)
 
 # 生成initcode.h
 $(ELFUser): $(UserOBJ)
-	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $(TARGET)/user/initcode.out $(TARGET)/user/initcode.o
+	$(LD) $(LDFLAGS) -N -e main -Ttext 0x0 -o $(TARGET)/user/initcode.out $(TARGET)/user/initcode.o
 	$(OBJCOPY) -S -O binary $(TARGET)/user/initcode.out $(TARGET)/user/initcode
 	xxd -i $(TARGET)/user/initcode > $(UserPath)/initcode.h
 
