@@ -1,16 +1,17 @@
 #include "mod.h"
-#include "../lock/type.h"
+#include "../lock/type.h"  
 #include "../lock/method.h"
-#include "../arch/method.h"
+#include "../arch/method.h" 
 #include "../lib/mod.h"
 
-// -------------------- M-mode timer side --------------------
+/*-------------------- 工作在M-mode --------------------*/
 
-// from trap.S
+// in trap.S M-mode时钟中断处理流程()
 extern void timer_vector();
 
-// each hart's mscratch scratchpad for M-mode timer_vector
+// 每个CPU在时钟中断中需要的临时空间
 static uint64 mscratch[NCPU][5] = {0};
+
 void timer_init()
 {
     // 获取当前cpuid
@@ -39,54 +40,51 @@ void timer_init()
     w_mie(r_mie() | MIE_MTIE);
 }
 
+/*--------------------- 工作在S-mode --------------------*/
 
-// -------------------- S-mode accounting side --------------------
-
+// 全局系统时钟
 static timer_t sys_timer[NCPU];
 
 static struct {
     spinlock_t lk;
-    uint64 total_ticks;
+    uint64 total_ticks;  
 } sys_total_timer;
 
 void timer_create()
 {
-    int cpuid = r_tp();
+    int cpuid = r_tp();  
 
-    // per-hart counter init
+    // 每个CPU初始化自己的锁和计数
     spinlock_init(&sys_timer[cpuid].lk, "sys_timer");
     sys_timer[cpuid].ticks = 0;
-
-    // only hart0 init global counter/lock
+    // 仅CPU0初始化全局总计数器（避免重复初始化）
     if (cpuid == 0) {
         spinlock_init(&sys_total_timer.lk, "sys_total_timer");
         sys_total_timer.total_ticks = 0;
     }
 }
-
-// this is called from trap_kernel_handler() for timer/SSIP
-void timer_interrupt_handler(void)
-{
+void timer_update()
+{ 
     int cpuid = r_tp();
 
-    // bump global ticks
     spinlock_acquire(&sys_total_timer.lk);
-    sys_total_timer.total_ticks++;
-    //uint64 now_total = sys_total_timer.total_ticks;
+    sys_total_timer.total_ticks++;  
     spinlock_release(&sys_total_timer.lk);
 
-    // bump per-cpu ticks
+    // 更新当前CPU的计数
     spinlock_acquire(&sys_timer[cpuid].lk);
-    sys_timer[cpuid].ticks++;
-    //uint64 hart_ticks = sys_timer[cpuid].ticks;
+    sys_timer[cpuid].ticks++; 
     spinlock_release(&sys_timer[cpuid].lk);
-    w_sip(r_sip() & ~2ULL);
+
+    // 更新当前CPU的mtimecmp
+    volatile uint64 *mtime = (volatile uint64 *)CLINT_MTIME;
+    volatile uint64 *mtimecmp = (volatile uint64 *)CLINT_MTIMECMP(cpuid);
+    *mtimecmp = *mtime + INTERVAL;
 }
 
-// helper if you ever want to read total_ticks elsewhere
 uint64 timer_get_ticks()
 {
-    uint64 total;
+    uint64 total = 0;
     spinlock_acquire(&sys_total_timer.lk);
     total = sys_total_timer.total_ticks;
     spinlock_release(&sys_total_timer.lk);

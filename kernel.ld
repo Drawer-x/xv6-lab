@@ -1,48 +1,44 @@
-OUTPUT_ARCH(riscv)
-ENTRY(_entry)
+OUTPUT_ARCH( "riscv" )
+ENTRY( _entry )
 
 SECTIONS
 {
-  /* 内核基址（OpenSBI 模式） */
   . = 0x80000000;
 
-  /* -------- text -------- */
-  PROVIDE(_stext = .);
-  .text : { *(.text .text.*) }
-  PROVIDE(_etext = .);
+  .text : {
+    *(.text .text.*)
+    . = ALIGN(0x1000);
 
-  /* -------- trampoline：独占一页 -------- */
-  . = ALIGN(0x1000);
-  PROVIDE(trampoline = .);
-  .trampoline : { *(.trampoline) }
+    _trampoline = .;
+    *(trampsec)
+    . = ALIGN(0x1000);
+    ASSERT(. - _trampoline == 0x1000, "error: trampoline larger than one page");
 
-  /* ！！关键：把位置推进到下一页，避免 rodata/data 挤进同一页 */
-  . = ALIGN(0x1000);
-
-  /* -------- rodata（导出边界，方便映射） -------- */
-  PROVIDE(_srodata = .);
-  .rodata : { *(.rodata .rodata.*) }
-  PROVIDE(_erodata = .);
-
-  /* ----------------  (.data) ---------------- */
-  . = ALIGN(0x1000);
-  PROVIDE(_sdata = .);
-  .data : {
-    *(.data .data.*)
-    *(.sdata .sdata.*)
+    PROVIDE(KERNEL_DATA = .);
   }
-  PROVIDE(_edata = .);
 
-  /* -------- bss -------- */
-  _sbss = .;
-  .bss : { *(.bss .bss.*) *(COMMON) }
-  _ebss = .;
+  .rodata : {
+    . = ALIGN(16);
+    *(.srodata .srodata.*) /* do not need to distinguish this from .rodata */
+    . = ALIGN(16);
+    *(.rodata .rodata.*)
+  }
 
-  /* -------- alloc region -------- */
-  . = ALIGN(0x1000);
+  .data : {
+    . = ALIGN(16);
+    *(.sdata .sdata.*) /* do not need to distinguish this from .data */
+    . = ALIGN(16);
+    *(.data .data.*)
+  }
+
+  .bss : {
+    . = ALIGN(16);
+    *(.sbss .sbss.*) /* do not need to distinguish this from .bss */
+    . = ALIGN(16);
+    *(.bss .bss.*)
+  }
+
+  . = ALIGN(4096);
   PROVIDE(ALLOC_BEGIN = .);
-  . += 0x01000000;   /* 16MB */
-  PROVIDE(ALLOC_END = .);
-
-  /DISCARD/ : { *(.eh_frame) *(.comment) }
+  PROVIDE(ALLOC_END = 0x80000000 + 128M);
 }

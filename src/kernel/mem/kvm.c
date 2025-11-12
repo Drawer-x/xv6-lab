@@ -1,8 +1,10 @@
 #include "mod.h"
+
 // -----------------------------------------------------------------------------
 // 内核页表
 // -----------------------------------------------------------------------------
 pgtbl_t kernel_pgtbl;
+
 // -----------------------------------------------------------------------------
 // 小工具
 // -----------------------------------------------------------------------------
@@ -45,7 +47,7 @@ pte_t *vm_getpte(pgtbl_t pgtbl, uint64 va, bool alloc)
 }
 
 // 在 pgtbl 中建立 [va,va+len) -> [pa,pa+len) 的映射（叶子 PTE 权限为 perm）
-int vm_mappages(pgtbl_t pgtbl, uint64 va, uint64 pa, uint64 len, int perm)
+void vm_mappages(pgtbl_t pgtbl, uint64 va, uint64 pa, uint64 len, int perm)
 {
     vm_check_page_aligned(va, pa, len);
     uint64 end = va + len;
@@ -57,7 +59,6 @@ int vm_mappages(pgtbl_t pgtbl, uint64 va, uint64 pa, uint64 len, int perm)
         va += PGSIZE;
         pa += PGSIZE;
     }
-    return 0;
 }
 
 // 解除 [va,va+len) 的映射；freeit=true 时释放对应物理页（通常用于用户页）
@@ -110,7 +111,7 @@ void kvm_init()
                 (uint64)_sdata, (uint64)_sdata,
                 (uint64)(_ebss - _sdata),
                 PTE_R | PTE_W);
-    
+
     // 4) 可分配区域（恒等映射）：RW
     vm_mappages(kernel_pgtbl,
                 (uint64)ALLOC_BEGIN, (uint64)ALLOC_BEGIN,
@@ -139,54 +140,14 @@ void kvm_init()
 
     printf("[kvm_init] kernel_pgtbl ready. text[%p,%p) rodata[%p,%p) data..bss[%p,%p) tramp[%p]\n",
        _stext, _etext, _srodata, _erodata, _sdata, _ebss, trampoline);
-    // 在 kvm_init 中映射 ALLOC_BEGIN 后添加：
-    printf("[kvm_init] ALLOC mapped: va=[%p, %p), pa=[%p, %p), perm=R|W\n",
-       ALLOC_BEGIN, ALLOC_END,
-       ALLOC_BEGIN, ALLOC_END);
+
 }
 
-// /* 初始化当前HART的内核页表和栈 */
-// void kvm_inithart() {
-//     // 1. 切换到内核页表
-//     w_satp(MAKE_SATP(kernel_pgtbl));
-//     sfence_vma();  // 刷新TLB
-
-//     // 2. 分配内核栈并初始化mscratch寄存器（解决空指针访问问题）new
-//     char *kstack = (char*)pmem_alloc(true);  // 从内核区域分配一页作为栈
-//     assert(kstack != NULL, "kvm_inithart: failed to alloc kernel stack");
-//     uint64 stack_top = (uint64)kstack + PGSIZE;  // 栈顶地址（RISC-V栈向下生长）
-//     w_mscratch(stack_top);  // mscratch存储内核栈顶
-//     printf("[kvm_inithart] hart initialized. stack_top=%p\n", stack_top);
-// }
 void kvm_inithart()
 {
     w_satp(MAKE_SATP(kernel_pgtbl));
     sfence_vma();
 }
-// void kvm_inithart() {
-//   printf("[kvm_inithart] start\n");  // 第一步打印
-//   // 1. 切换到内核页表
-//   w_satp(MAKE_SATP(kernel_pgtbl));
-//   printf("[kvm_inithart] satp set\n");  // 确认页表切换前的打印
-//   sfence_vma();
-//   printf("[kvm_inithart] tlb flushed\n");  // 确认TLB刷新
-
-//   // 2. 分配内核栈
-//   char *kstack = (char*)pmem_alloc(true);
-//   assert(kstack != NULL, "kvm_inithart: alloc stack failed");
-//   printf("[kvm_inithart] stack allocated at %p\n", kstack);  // 确认栈分配
-
-//   uint64 stack_top = (uint64)kstack + PGSIZE;
-//   w_mscratch(stack_top);
-//   // 读写栈顶下方的地址（测试栈访问）
-//   *(uint64*)(stack_top - 8) = 0x12345678;  // 向栈压入一个值
-//   uint64 test = *(uint64*)(stack_top - 8);  // 从栈读出
-//   if (test != 0x12345678) {
-//     panic("stack access failed");  // 若失败，打印错误
-//   }
-//   printf("[kvm_inithart] stack test passed. stack_top=%p\n", stack_top);
-//   printf("[kvm_inithart] hart initialized. stack_top=%p\n", stack_top);
-// }
 
 // -----------------------------------------------------------------------------
 // Debug：输出页表内容（三级页表）
