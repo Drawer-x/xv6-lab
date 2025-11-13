@@ -48,17 +48,17 @@ static uint64 alloc_kstack_page()
  *  - 在“同一虚拟地址”上映射 trampoline（一页，RX）
  *    这样切到用户页表后，trampoline 仍可在相同 VA 上被命中
  */
-pgtbl_t proc_pgtbl_init(uint64 /*trapframe_pa: 未在本阶段映射到用户VA*/)
+pgtbl_t proc_pgtbl_init(uint64 trapframe)
 {
     pgtbl_t pgtbl = (pgtbl_t)pmem_alloc(true);
     assert(pgtbl != NULL, "proc_pgtbl_init: root alloc failed");
     memset(pgtbl, 0, PGSIZE);
+// 映射 trampoline（仅S态执行，不置U，与内核页表同VA）
+vm_mappages(pgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 
-    // trampoline 同VA映射（与内核一致）
-    uint64 tramp_va = (uint64)ALIGN_DOWN((uint64)trampoline, PGSIZE);
-    uint64 tramp_pa = tramp_va; // 你的内核页表是恒等映射，trampoline 也在内核地址段
-    vm_mappages(pgtbl, tramp_va, tramp_pa, PGSIZE, PTE_R | PTE_X); // 不标U位
-
+// 映射当前进程的trapframe（仅S态读写，不置U，与内核页表同VA）
+// 假设当前进程的trapframe物理地址为proc_trapframe_pa
+vm_mappages(pgtbl, TRAPFRAME, (uint64)trapframe, PGSIZE, PTE_R | PTE_W);
     return pgtbl;
 }
 
