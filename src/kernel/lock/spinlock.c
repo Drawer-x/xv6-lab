@@ -58,10 +58,10 @@ void spinlock_acquire(spinlock_t *lk)
     
     // 原子交换操作，等待获取锁
     while (__sync_lock_test_and_set(&lk->locked, 1) != 0) {
-        // 临时开启中断，避免死锁
-        if (intr_get() == 0) {
-            intr_on();
-        }
+        // // 临时开启中断，避免死锁
+        // if (intr_get() == 0) {
+        //     intr_on();
+        // }
     }
     
     // 插入内存屏障

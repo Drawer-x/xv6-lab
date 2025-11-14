@@ -65,10 +65,10 @@ void trap_kernel_inithart()
     plic_inithart();
     // 填写内核态中断处理函数
     w_stvec((uint64)kernel_vector);
-    // 开启S-mode全局中断（允许CPU响应外部中断）
-    uint64 sstatus = r_sstatus();
-    sstatus |= SSTATUS_SIE;  // 开启S-mode中断总开关,main
-    w_sstatus(sstatus);
+    // // 开启S-mode全局中断（允许CPU响应外部中断）
+    // uint64 sstatus = r_sstatus();
+    // sstatus |= SSTATUS_SIE;  // 开启S-mode中断总开关,main
+    // w_sstatus(sstatus);
     // 通过 sie 寄存器开启特定中断（定时器 + 外部中断）
     uint64 sie_val = r_sie();
     sie_val |= SIE_STIE;  
