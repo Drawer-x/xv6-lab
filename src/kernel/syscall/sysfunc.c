@@ -99,50 +99,53 @@ uint64 sys_copyinstr()
     uint64 new_top: 0 表示查询
     返回: 当前(调整后的)堆顶
 */
+#define DEBUG_PRINT(event, addr) \
+    printf(#event " event: ret_heap_top = %p\n", (void*)addr); \
+    vm_print(p->pgtbl)
+
 uint64 sys_brk()
 {
     proc_t *p = myproc();
     uint64 new_top;
 
+    // 读取参数：new_heap_top（0 表示查询）
     arg_uint64(0, &new_top);
 
-    uint64 old_top = p->heap_top;
-    uint64 ret_top = old_top;
+    uint64 cur = p->heap_top;
 
-    if (new_top == 0)
-    {
-        // 查询
-        printf("[sys_brk] query heap_top=%p\n", (void *)old_top);
-        return old_top;
+    if (new_top == 0) {
+        // 查询当前堆顶
+        DEBUG_PRINT(look, cur);
+        return cur;
     }
 
-    if (new_top > old_top)
-    {
-        uint64 grown = uvm_heap_grow(p->pgtbl, old_top, (uint32)(new_top - old_top));
-        if (grown == (uint64)-1)
-        {
-            printf("[sys_brk] grow failed: old=%p want=%p\n",
-                   (void *)old_top, (void *)new_top);
-            return old_top;
-        }
-        p->heap_top = grown;
-        ret_top     = grown;
-        printf("[sys_brk] grow: %p -> %p\n", (void *)old_top, (void *)grown);
-    }
-    else if (new_top < old_top)
-    {
-        uint64 ungrown = uvm_heap_ungrow(p->pgtbl, old_top, (uint32)(old_top - new_top));
-        p->heap_top = ungrown;
-        ret_top     = ungrown;
-        printf("[sys_brk] ungrow: %p -> %p\n", (void *)old_top, (void *)ungrown);
-    }
-    else
-    {
+    if (new_top == cur) {
         // 不变
-        printf("[sys_brk] keep: %p\n", (void *)old_top);
+        DEBUG_PRINT(equal, cur);
+        return cur;
     }
 
-    return ret_top;
+    if (new_top > cur) {
+        // 增长
+        uint64 ret = uvm_heap_grow(p->pgtbl, cur, (uint32)(new_top - cur));
+        if (ret == (uint64)-1) {
+            DEBUG_PRINT(grow, cur);
+            return (uint64)-1;
+        }
+        p->heap_top = ret;
+        DEBUG_PRINT(grow, ret);
+        return ret;
+    } else {
+        // 收缩
+        uint64 ret = uvm_heap_ungrow(p->pgtbl, cur, (uint32)(cur - new_top));
+        if (ret == (uint64)-1) {
+            DEBUG_PRINT(ungrow, cur);
+            return (uint64)-1;
+        }
+        p->heap_top = ret;
+        DEBUG_PRINT(ungrow, ret);
+        return ret;
+    }
 }
 
 /*

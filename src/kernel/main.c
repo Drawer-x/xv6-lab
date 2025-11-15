@@ -25,8 +25,7 @@ int main()
         started = 1;
     } else {
 
-        while (started == 0)
-            ;
+        while (started == 0);
         __sync_synchronize();
         printf("cpu %d is booting!\n", cpuid);
         kvm_inithart();

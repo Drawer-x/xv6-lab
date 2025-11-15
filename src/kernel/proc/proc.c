@@ -76,6 +76,9 @@ void proc_make_first()
     memset(&proczero, 0, sizeof(proczero));
     proczero.pid = 0;
 
+    // 初始化mmap字段：初始无映射区域，设为NULL
+    proczero.mmap = NULL;  // <-- 新增：初始化mmap
+    
     // 1) trapframe（仅在内核访问，放内核物理页）
     proczero.tf = (trapframe_t *)pmem_alloc(true);
     assert(proczero.tf != NULL, "proc_make_first: trapframe alloc failed");
