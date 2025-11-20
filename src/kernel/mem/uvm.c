@@ -82,16 +82,22 @@ void uvm_copyin_str(pgtbl_t pgtbl, uint64 dst, uint64 src, uint32 maxlen)
 
 // 打印以mmap为首的mmap链
 // for debug
-void uvm_show_mmaplist(mmap_region_t *mmap)
-{
+void uvm_show_mmaplist(mmap_region_t *mmap) {
     mmap_region_t *tmp = mmap;
     printf("\nalloced mmap_space:\n");
-    if (tmp == NULL)
+    if (tmp == NULL) {
         printf("empty\n");
-    while (tmp != NULL)
-    {
-        printf("alloced mmap_region: %p ~ %p\n", tmp->begin, tmp->begin + tmp->npages * PGSIZE);
+        return;
+    }
+    int count = 0; // 防止无限打印
+    while (tmp != NULL && count < 20) { // 限制最大打印次数
+        printf("mmap_node: %p | begin: %p ~ %p | next: %p\n",
+               tmp, tmp->begin, tmp->begin + tmp->npages * PGSIZE, tmp->next);
         tmp = tmp->next;
+        count++;
+    }
+    if (count >= 20) {
+        printf("Warning: mmap list may have cycle!\n");
     }
 }
 
@@ -152,11 +158,9 @@ void uvm_mmap(uint64 begin, uint32 npages, int perm)
 {
     proc_t *p = myproc();
     uint64 len = npages * PGSIZE;
-    mmap_region_t *new_region, *last, *tmp;
-
-    new_region = (mmap_region_t*)pmem_alloc(false);
-    assert(new_region != NULL, "uvm_mmap: out of memory");
-
+    
+    mmap_region_t *last, *tmp;
+    mmap_region_t *new_region = mmap_region_alloc();
     if (begin == 0) {
         begin = uvm_mmap_find(p->mmap, len, &last, &tmp);
         assert(begin != 0, "uvm_mmap: no available space");
@@ -177,11 +181,11 @@ void uvm_mmap(uint64 begin, uint32 npages, int perm)
             tmp = tmp->next;
         }
     }
-
+    
     new_region->begin = begin;
     new_region->npages = npages;
     new_region->next = tmp;
-
+    
     if (last == NULL) {
         p->mmap = new_region;
     } else {
@@ -197,51 +201,112 @@ void uvm_mmap(uint64 begin, uint32 npages, int perm)
 
     if (last != NULL && last->begin + last->npages * PGSIZE == new_region->begin) {
         mmap_merge(last, new_region, true);
-        new_region = last;
+        new_region = last; 
+        new_region->next = tmp;  //
     }
-    if (new_region->next != NULL && 
-        new_region->begin + new_region->npages * PGSIZE == new_region->next->begin) {
+    
+    if (new_region->next != NULL && new_region->begin + new_region->npages * PGSIZE == new_region->next->begin) {
         mmap_merge(new_region, new_region->next, true);
+        new_region->next = new_region->next->next; //
     }
 }
 
-
-// 在用户页表和进程mmap链里释放mmap区域 [begin, begin + npages * PGSIZE)
-// 失败则panic卡死
 void uvm_munmap(uint64 begin, uint32 npages)
 {
     proc_t *p = myproc();
     uint64 len = npages * PGSIZE;
     uint64 end = begin + len;
     mmap_region_t *prev = NULL, *curr = p->mmap;
+    bool freed = false;  
 
-    while (curr != NULL) {
+    while (curr != NULL && begin < end) {  
         uint64 curr_end = curr->begin + curr->npages * PGSIZE;
-        if (curr->begin == begin && curr_end == end) {
-            if (prev == NULL) {
-                p->mmap = curr->next;
-            } else {
-                prev->next = curr->next;
+        if (curr_end > begin) {
+            freed = true;  
+            uint64 unmap_begin = (curr->begin > begin) ? curr->begin : begin;
+            uint64 unmap_end = (curr_end < end) ? curr_end : end;
+            
+            if (begin <= curr->begin && end >= curr_end) {
+                vm_unmappages(p->pgtbl, curr->begin, curr->npages * PGSIZE, true);
+                
+                mmap_region_t *to_free = curr;
+                if (prev == NULL) {
+                    p->mmap = curr->next;
+                    curr = p->mmap;
+                } else {
+                    prev->next = curr->next;
+                    curr = curr->next;
+                }
+                mmap_region_free(to_free);
+                
+                if (prev != NULL && curr != NULL && 
+                    prev->begin + prev->npages * PGSIZE == curr->begin) {
+                    mmap_merge(prev, curr, true);
+                    prev->next = curr->next;
+                    curr = prev->next;
+                }
+                begin = curr_end;
+                continue;
             }
-
-            for (uint64 va = begin; va < end; va += PGSIZE) {
-                pte_t *pte = vm_getpte(p->pgtbl, va, false);
-                assert(pte != NULL && (*pte & PTE_V), "uvm_munmap: invalid page");
-                uint64 pa = PTE_TO_PA(*pte);
-                vm_unmappages(p->pgtbl, va, PGSIZE, true);
-                pmem_free(pa, false);  // 修正参数类型，移除错误宏
+            else if (begin <= curr->begin && end < curr_end) {
+                uint32 unmap_npages = (unmap_end - unmap_begin) / PGSIZE;
+                vm_unmappages(p->pgtbl, unmap_begin, unmap_npages * PGSIZE, true);
+                
+                curr->npages -= unmap_npages;
+                curr->begin = unmap_end;
+                begin = end;
             }
+            else if (begin > curr->begin && end >= curr_end) {
+                uint32 unmap_npages = (unmap_end - unmap_begin) / PGSIZE;
+                vm_unmappages(p->pgtbl, unmap_begin, unmap_npages * PGSIZE, true);
+                
+                curr->npages -= unmap_npages;
+                begin = curr_end;
+            }
+            else if (begin > curr->begin && end < curr_end) {
+                uint32 unmap_npages = (unmap_end - unmap_begin) / PGSIZE;
+                vm_unmappages(p->pgtbl, unmap_begin, unmap_npages * PGSIZE, true);
+                
+                mmap_region_t *new_mmap = mmap_region_alloc();
+                new_mmap->begin = end;
+                new_mmap->npages = (curr_end - end) / PGSIZE;
+                new_mmap->next = curr->next;
+                
+                curr->npages = (begin - curr->begin) / PGSIZE;
+                curr->next = new_mmap;
+                
+                mmap_region_t *prev_node = curr;    
+                mmap_region_t *curr_node = new_mmap;  
+                mmap_region_t *next_node = curr_node->next;  
+            
+                if (prev_node != NULL && 
+                    (prev_node->begin + prev_node->npages * PGSIZE) == curr_node->begin) {
+                    prev_node->npages += curr_node->npages;
+                    prev_node->next = next_node;
+                    mmap_region_free(curr_node);
+                    curr_node = prev_node;
+                }
 
-            mmap_region_free(curr);  // 使用正确的释放函数
-            return;
+                if (next_node != NULL && 
+                    (curr_node->begin + curr_node->npages * PGSIZE) == next_node->begin) {
+                    curr_node->npages += next_node->npages;
+                    curr_node->next = next_node->next;
+                    mmap_region_free(next_node);
+                }
+
+                prev = new_mmap;
+                curr = new_mmap->next;
+                begin = end;
+                continue;
+            }
         }
+        
         prev = curr;
         curr = curr->next;
     }
 
-    assert(false, "uvm_munmap: region not found");
+    assert(freed, "uvm_munmap: region not found");
 }
-
 /*------------------part-3: 用户空间heap和stack管理相关------------------*/
 
 // 用户堆空间增加, 返回新的堆顶地址 (注意栈顶最大值限制)

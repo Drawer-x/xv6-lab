@@ -20,6 +20,7 @@ int main()
         kvm_inithart();
         trap_kernel_init();
         trap_kernel_inithart();
+        mmap_init();
         proc_make_first();
         __sync_synchronize();
         started = 1;

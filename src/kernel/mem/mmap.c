@@ -40,6 +40,7 @@ mmap_region_t *mmap_region_alloc() {
     list_head.next = node->next;
     
     spinlock_release(&list_lk);
+
     return &node->mmap;
 }
 
