@@ -15,4 +15,6 @@ target/kernel/boot/start.o: src/kernel/boot/start.c \
  src/kernel/boot/../trap/../mem/method.h \
  src/kernel/boot/../trap/../syscall/mod.h \
  src/kernel/boot/../trap/../syscall/type.h \
- src/kernel/boot/../trap/../syscall/method.h
+ src/kernel/boot/../trap/../syscall/method.h \
+ src/kernel/boot/../trap/../syscall/../proc/mod.h \
+ src/kernel/boot/../trap/../syscall/../proc/method.h

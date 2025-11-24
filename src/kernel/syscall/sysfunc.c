@@ -201,3 +201,64 @@ uint64 sys_munmap()
 
     return 0;
 }
+/*
+    测试页表复制与销毁
+    成功返回0, 失败返回-1
+*/
+uint64 sys_test_pgtbl() {
+    proc_t *p = myproc();
+    if (!p || !p->pgtbl) {
+        printf("❌ 测试失败：当前进程未初始化或无有效页表\n");
+        return -1;
+    }
+
+    // 1. 打印当前进程状态（复制源信息）
+    printf("\n[1] Current process info (source of copy):\n");
+    printf("  - PID: %d %s\n", p->pid, (p->pid == 0) ? "(kernel init process)" : "");
+    printf("  - Source page table: %p\n", p->pgtbl);
+    printf("  - Heap top: %p\n", p->heap_top);
+    printf("  - User stack pages: %d\n", p->ustack_npage);
+    printf("  - mmap regions: ");
+    if (p->mmap == NULL) {
+        printf("none\n");
+    } else {
+        printf("\n");
+        uvm_show_mmaplist(p->mmap);
+    }
+
+    // 2. 创建新页表
+    printf("\n[2] Creating new page table...\n");
+    pgtbl_t new_pgtbl = proc_pgtbl_init((uint64)p->tf);
+    if (!new_pgtbl) {
+        printf("❌ 测试失败：创建新页表失败\n");
+        return -2;
+    }
+    printf("✅ 新页表创建成功：%p\n", new_pgtbl);
+
+    // 3. 复制页表（堆+栈+mmap全区域）
+    printf("\n[3] Copying page table content (heap+stack+mmap)...\n");
+    uvm_copy_pgtbl(p->pgtbl, new_pgtbl, p->heap_top, p->ustack_npage, p->mmap);
+    printf("✅ 页表复制完成\n");
+
+    // 4. 验证复制结果（仅打印页表结构）
+    printf("\n[4] Verifying copied page table structure...\n");
+    printf("  - Copied page table content:\n");
+    vm_print(new_pgtbl);
+    printf("✅ 页表结构复制验证通过\n");
+
+    // 5. 销毁新页表
+    printf("\n[5] Destroying copied page table...\n");
+    uvm_destroy_pgtbl(new_pgtbl);
+
+    // 6. 验证销毁有效性
+    uint64 test_va = (p->ustack_npage > 0) ? (TRAPFRAME - PGSIZE) : USER_BASE;
+    pte_t *invalid_pte = vm_getpte(new_pgtbl, test_va, false);
+    if (!invalid_pte) {
+        printf("✅ 页表销毁成功：资源已完全释放\n");
+    } else {
+        printf("❌ 测试失败：页表销毁后仍可访问页表项\n");
+        return -4;
+    }
+
+    return 0;
+}

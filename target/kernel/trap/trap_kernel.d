@@ -10,4 +10,6 @@ target/kernel/trap/trap_kernel.o: src/kernel/trap/trap_kernel.c \
  src/kernel/trap/../lib/../lock/method.h src/kernel/trap/../mem/mod.h \
  src/kernel/trap/../mem/type.h src/kernel/trap/../mem/method.h \
  src/kernel/trap/../syscall/mod.h src/kernel/trap/../syscall/type.h \
- src/kernel/trap/../syscall/method.h
+ src/kernel/trap/../syscall/method.h \
+ src/kernel/trap/../syscall/../proc/mod.h \
+ src/kernel/trap/../syscall/../proc/method.h

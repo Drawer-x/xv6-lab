@@ -1,7 +1,7 @@
-// in initcode.c
+// 测试页表复制(uvm_copy_pgtbl)和销毁(uvm_destroy_pgtbl)
 #include "sys.h"
 
-// 与内核保持一致
+// 与内核一致的地址定义（构造测试页表用）
 #define VA_MAX       (1ul << 38)
 #define PGSIZE       4096
 #define MMAP_END     (VA_MAX - (16 * 256 + 2) * PGSIZE)
@@ -9,26 +9,18 @@
 
 int main()
 {
-    // 建议画图理解这些地址和长度的含义
-
-    // sys_mmap 测试 
+    // 1. 构造复杂页表（复用示例的mmap组合，覆盖多区域/不连续地址）
     syscall(SYS_mmap, MMAP_BEGIN + 4 * PGSIZE, 3 * PGSIZE);
     syscall(SYS_mmap, MMAP_BEGIN + 10 * PGSIZE, 2 * PGSIZE);
-    syscall(SYS_mmap, MMAP_BEGIN + 2 * PGSIZE,  2 * PGSIZE);
+    syscall(SYS_mmap, MMAP_BEGIN + 2 * PGSIZE, 2 * PGSIZE);
     syscall(SYS_mmap, MMAP_BEGIN + 12 * PGSIZE, 1 * PGSIZE);
     syscall(SYS_mmap, MMAP_BEGIN + 7 * PGSIZE, 3 * PGSIZE);
     syscall(SYS_mmap, MMAP_BEGIN, 2 * PGSIZE);
     syscall(SYS_mmap, 0, 10 * PGSIZE);
 
-    // sys_munmap 测试
-    syscall(SYS_munmap, MMAP_BEGIN + 10 * PGSIZE, 5 * PGSIZE);
-    syscall(SYS_munmap, MMAP_BEGIN, 10 * PGSIZE);
-    syscall(SYS_munmap, MMAP_BEGIN + 17 * PGSIZE, 2 * PGSIZE);
-    syscall(SYS_munmap, MMAP_BEGIN + 15 * PGSIZE, 2 * PGSIZE);
-    syscall(SYS_munmap, MMAP_BEGIN + 19 * PGSIZE, 2 * PGSIZE);
-    syscall(SYS_munmap, MMAP_BEGIN + 22 * PGSIZE, 1 * PGSIZE);
-    syscall(SYS_munmap, MMAP_BEGIN + 21 * PGSIZE, 1 * PGSIZE);
+    // __syscall0: 0个参数的系统调用，参数是系统调用编号
+    int ret = __syscall0(7);
 
-    while(1);
-    return 0;
+    while(1); // 挂起进程
+    return ret;
 }

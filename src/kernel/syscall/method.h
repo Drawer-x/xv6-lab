@@ -12,3 +12,4 @@ uint64 sys_copyinstr();
 uint64 sys_brk();
 uint64 sys_mmap();
 uint64 sys_munmap();
+uint64 sys_test_pgtbl();

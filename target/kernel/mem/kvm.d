@@ -11,4 +11,6 @@ target/kernel/mem/kvm.o: src/kernel/mem/kvm.c src/kernel/mem/mod.h \
  src/kernel/mem/../trap/type.h src/kernel/mem/../trap/method.h \
  src/kernel/mem/../trap/../syscall/mod.h \
  src/kernel/mem/../trap/../syscall/type.h \
- src/kernel/mem/../trap/../syscall/method.h
+ src/kernel/mem/../trap/../syscall/method.h \
+ src/kernel/mem/../trap/../syscall/../proc/mod.h \
+ src/kernel/mem/../trap/../syscall/../proc/method.h

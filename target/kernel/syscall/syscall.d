@@ -14,4 +14,5 @@ target/kernel/syscall/syscall.o: src/kernel/syscall/syscall.c \
  src/kernel/syscall/../mem/method.h \
  src/kernel/syscall/../mem/../trap/mod.h \
  src/kernel/syscall/../mem/../trap/type.h \
- src/kernel/syscall/../mem/../trap/method.h
+ src/kernel/syscall/../mem/../trap/method.h \
+ src/kernel/syscall/../proc/mod.h src/kernel/syscall/../proc/method.h

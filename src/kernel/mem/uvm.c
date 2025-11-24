@@ -415,6 +415,7 @@ void uvm_destroy_pgtbl(pgtbl_t pgtbl)
 
 // 连续虚拟空间的复制
 // 在uvm_copy_pgtbl中使用
+__attribute__((unused))
 static void copy_range(pgtbl_t old, pgtbl_t new, uint64 begin, uint64 end)
 {
     uint64 va, pa, page;
@@ -440,19 +441,79 @@ static void copy_range(pgtbl_t old, pgtbl_t new, uint64 begin, uint64 end)
 // 拷贝的页表管理的物理页是原来页表的复制品
 void uvm_copy_pgtbl(pgtbl_t old, pgtbl_t new, uint64 heap_top, uint64 ustack_npage, mmap_region_t *mmap)
 {
-    copy_range(old, new, USER_BASE, heap_top);
+    // -------------------------- 1. 复制堆区域（USER_BASE ~ heap_top）--------------------------
+    uint64 va_start = USER_BASE;
+    uint64 valid_va_begin = 0;  // 记录当前有效范围的起始VA
+    bool in_valid_range = false;
 
+    for (uint64 va = va_start; va < heap_top; va += PGSIZE) {
+        pte_t *pte = vm_getpte(old, va, false);
+        // 检查PTE是否存在且有效
+        bool is_valid = (pte != NULL) && (*pte & PTE_V);
+
+        if (is_valid && !in_valid_range) {
+            // 进入有效范围：记录起始VA
+            valid_va_begin = va;
+            in_valid_range = true;
+        } else if (!is_valid && in_valid_range) {
+            // 退出有效范围：复制当前有效范围
+            copy_range(old, new, valid_va_begin, va);
+            in_valid_range = false;
+        }
+    }
+    // 处理末尾的有效范围（如果循环结束时仍在有效范围中）
+    if (in_valid_range) {
+        copy_range(old, new, valid_va_begin, heap_top);
+    }
+
+    // -------------------------- 2. 复制用户栈区域（stack_bottom ~ TRAPFRAME）--------------------------
     uint64 stack_bottom = TRAPFRAME - ustack_npage * PGSIZE;
-    copy_range(old, new, stack_bottom, TRAPFRAME);
+    in_valid_range = false;  // 重置状态
 
+    for (uint64 va = stack_bottom; va < TRAPFRAME; va += PGSIZE) {
+        pte_t *pte = vm_getpte(old, va, false);
+        bool is_valid = (pte != NULL) && (*pte & PTE_V);
+
+        if (is_valid && !in_valid_range) {
+            valid_va_begin = va;
+            in_valid_range = true;
+        } else if (!is_valid && in_valid_range) {
+            copy_range(old, new, valid_va_begin, va);
+            in_valid_range = false;
+        }
+    }
+    if (in_valid_range) {
+        copy_range(old, new, valid_va_begin, TRAPFRAME);
+    }
+
+    // -------------------------- 3. 复制mmap区域 --------------------------
     mmap_region_t *tmp = mmap;
     while (tmp != NULL) {
         uint64 begin = tmp->begin;
         uint64 end = begin + tmp->npages * PGSIZE;
-        copy_range(old, new, begin, end);
+        in_valid_range = false;  // 重置状态
+
+        for (uint64 va = begin; va < end; va += PGSIZE) {
+            pte_t *pte = vm_getpte(old, va, false);
+            bool is_valid = (pte != NULL) && (*pte & PTE_V);
+
+            if (is_valid && !in_valid_range) {
+                valid_va_begin = va;
+                in_valid_range = true;
+            } else if (!is_valid && in_valid_range) {
+                copy_range(old, new, valid_va_begin, va);
+                in_valid_range = false;
+            }
+        }
+        // 处理mmap区域末尾的有效范围
+        if (in_valid_range) {
+            copy_range(old, new, valid_va_begin, end);
+        }
+
         tmp = tmp->next;
     }
 
+    // -------------------------- 4. 复制trapframe（原有逻辑不变）--------------------------
     pte_t *old_pte = vm_getpte(old, TRAPFRAME, false);
     assert(old_pte != NULL && (*old_pte & PTE_V), "uvm_copy_pgtbl: trapframe not found");
     uint64 trapframe_pa = PTE_TO_PA(*old_pte);
@@ -461,6 +522,7 @@ void uvm_copy_pgtbl(pgtbl_t old, pgtbl_t new, uint64 heap_top, uint64 ustack_npa
     memmove((void*)new_trapframe_pa, (void*)trapframe_pa, PGSIZE);
     vm_mappages(new, TRAPFRAME, new_trapframe_pa, PGSIZE, PTE_FLAGS(*old_pte) | PTE_V);
 
+    // -------------------------- 5. 映射trampoline（原有逻辑不变）--------------------------
     old_pte = vm_getpte(old, TRAMPOLINE, false);
     assert(old_pte != NULL && (*old_pte & PTE_V), "uvm_copy_pgtbl: trampoline not found");
     vm_mappages(new, TRAMPOLINE, PTE_TO_PA(*old_pte), PGSIZE, PTE_FLAGS(*old_pte) | PTE_V);

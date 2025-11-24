@@ -10,4 +10,6 @@ target/kernel/trap/timer.o: src/kernel/trap/timer.c src/kernel/trap/mod.h \
  src/kernel/trap/../lib/../lock/method.h src/kernel/trap/../mem/mod.h \
  src/kernel/trap/../mem/type.h src/kernel/trap/../mem/method.h \
  src/kernel/trap/../syscall/mod.h src/kernel/trap/../syscall/type.h \
- src/kernel/trap/../syscall/method.h
+ src/kernel/trap/../syscall/method.h \
+ src/kernel/trap/../syscall/../proc/mod.h \
+ src/kernel/trap/../syscall/../proc/method.h
