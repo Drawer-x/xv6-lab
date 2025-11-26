@@ -18,20 +18,27 @@ int main()
         pmem_init();
         kvm_init();
         kvm_inithart();
+        mmap_init();
+        proc_init();
+        proc_make_first();
         trap_kernel_init();
         trap_kernel_inithart();
-        mmap_init();
-        proc_make_first();
+
         __sync_synchronize();
         started = 1;
+
     } else {
 
-        while (started == 0);
+        while (started == 0)
+            ;
         __sync_synchronize();
         printf("cpu %d is booting!\n", cpuid);
         kvm_inithart();
         trap_kernel_inithart();
     }
-    while (1)
-        ;
+
+    proc_scheduler();
+
+    panic("main: never back!");
+    return 0;
 }

@@ -15,7 +15,6 @@ extern char kernel_vector[]; // 内核态trap处理流程, 进入内核后应当
 extern char *interrupt_info[16]; // 中断错误信息
 extern char *exception_info[16]; // 异常错误信息
 
-
 // 在user_vector()里面调用
 // 用户态trap处理的核心逻辑
 void trap_user_handler()
@@ -37,6 +36,9 @@ void trap_user_handler()
 		switch (trap_id) {
 		case 1: // S-mode software interrupt（由M态时钟中断转发）
 			timer_interrupt_handler();
+			// 核心添加：用户态时钟中断触发抢占式调度
+			// 用户进程运行时触发，直接调用proc_yield放弃CPU
+			proc_yield();
 			break;
 		case 9: // S-mode external interrupt（PLIC）
 			external_interrupt_handler();

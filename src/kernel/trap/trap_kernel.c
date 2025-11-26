@@ -173,14 +173,18 @@ void external_interrupt_handler()
 // 时钟中断处理 (基于CLINT)
 void timer_interrupt_handler()
 {
-    //printf("[DEBUG] Timer interrupt (CPU%d)\n", mycpuid());
-    // 由于sys_timer是共享资源, 但每个CPU都能收到时钟中断
-    // 所以只需要指定一个CPU(CPU-0)负责更新时钟
-    //if(mycpuid() == 0)
-    timer_update();
-    //timer_update();
-    // 清除 SSIP bit (S-mode software interrupt pending)
-    // 宣布 S-mode 软件中断处理完成
-    // 在 trap.S 里面有对应的两条命令, 去找找对应 trap.S 中的 "li a1, 2" 和 "csrw sip, a1"
+    // 1. 更新系统时钟（仅CPU0负责，避免多CPU重复更新）
+    if (mycpuid() == 0) {
+        timer_update();
+    }
+
+    // 2. 清除 SSIP bit（S-mode软件中断挂起位）
     w_sip(r_sip() & ~2);
+
+    // 3. 核心添加：内核态时钟中断触发抢占式调度
+    // 仅当当前有运行中的用户进程时，才进行抢占
+    proc_t *p = myproc();
+    if (p != NULL && p->state == RUNNING) {
+        proc_yield();  // 强迫进程交出CPU
+    }
 }

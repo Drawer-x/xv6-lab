@@ -4,8 +4,8 @@ target/kernel/boot/start.o: src/kernel/boot/start.c \
  src/kernel/boot/../trap/mod.h src/kernel/boot/../trap/type.h \
  src/kernel/boot/../trap/../lib/type.h \
  src/kernel/boot/../trap/../lib/../proc/type.h \
+ src/kernel/boot/../trap/../lib/../proc/../lock/type.h \
  /usr/lib/gcc-cross/riscv64-linux-gnu/11/include/stdarg.h \
- src/kernel/boot/../trap/../lock/type.h \
  src/kernel/boot/../trap/../lib/mod.h \
  src/kernel/boot/../trap/../lib/method.h \
  src/kernel/boot/../trap/../lib/../lock/mod.h \

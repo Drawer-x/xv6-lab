@@ -1,5 +1,7 @@
-// src/kernel/syscall/sysfunc.c
 #include "mod.h"
+#include "../proc/mod.h"   // 依赖进程管理函数
+#include "../trap/mod.h"   // 依赖 timer_wait 函数
+#include "../mem/mod.h"     // 依赖内存拷贝函数
 
 // 一个固定的测试数组，内核要发给用户的
 //static int kernel_array[5] = {1, 2, 3, 4, 5};
@@ -201,6 +203,7 @@ uint64 sys_munmap()
 
     return 0;
 }
+
 /*
     测试页表复制与销毁
     成功返回0, 失败返回-1
@@ -250,7 +253,7 @@ uint64 sys_test_pgtbl() {
     printf("\n[5] Destroying copied page table...\n");
     uvm_destroy_pgtbl(new_pgtbl);
 
-    // 6. 验证销毁有效性
+    // 6. 验证销毁有效性（新页表已释放，无法再查询页表项）
     uint64 test_va = (p->ustack_npage > 0) ? (TRAPFRAME - PGSIZE) : USER_BASE;
     pte_t *invalid_pte = vm_getpte(new_pgtbl, test_va, false);
     if (!invalid_pte) {
@@ -265,66 +268,100 @@ uint64 sys_test_pgtbl() {
 
 /*
     打印一个字符串
-    char *str
-    成功返回0
+    char *str: 用户态字符串地址
+    成功返回0，失败返回-1
 */
 uint64 sys_print_str()
 {
+    proc_t *p = myproc();
+    uint64 str_addr;
+    arg_uint64(0, &str_addr);
 
+    // 分配内核缓冲区（最多PGSIZE字节，避免溢出）
+    char *kernel_buf = (char *)pmem_alloc(true);
+    if (kernel_buf == NULL) {
+        return -1;
+    }
+
+    // 从用户态拷贝字符串到内核态（void返回值，无需判断）
+    uvm_copyin_str(p->pgtbl, (uint64)kernel_buf, str_addr, PGSIZE);
+
+    // 打印字符串（即使拷贝失败，kernel_buf会是默认值，避免崩溃）
+    printf("%s", kernel_buf);
+
+    // 释放内核缓冲区
+    pmem_free((uint64)kernel_buf, true);
+    return 0;
 }
 
 /*
     打印一个32位整数
-    int num
+    int num: 要打印的整数
     成功返回0
 */
 uint64 sys_print_int()
 {
+    int num;
+    // 用 arg_uint32 替代缺失的 arg_int，类型强转兼容有符号整数
+    arg_uint32(0, (uint32 *)&num);
 
+    printf("%d", num);
+    return 0;
 }
 
 /*
-    进程复制
-    返回子进程的pid
+    进程复制（fork）
+    返回：子进程PID（父进程），0（子进程），失败返回-1
 */
 uint64 sys_fork()
 {
-
+    return proc_fork(); // 直接调用proc.c中实现的proc_fork函数
 }
 
 /*
     等待子进程退出
-    uint64 addr_exit_state
+    uint64 addr_exit_state: 用户态地址，用于存储子进程退出码
+    返回：退出的子进程PID，失败返回-1
 */
 uint64 sys_wait()
 {
+    uint64 addr_exit_state;
+    // 读取用户态退出码存储地址（删除未使用的p变量）
+    arg_uint64(0, &addr_exit_state);
 
+    // 调用proc_wait等待子进程，获取子进程PID
+    int child_pid = proc_wait(addr_exit_state);
+    if (child_pid < 0) {
+        return (uint64)-1;
+    }
+
+    return (uint64)child_pid;
 }
 
 /*
     进程退出
-    int exit_code
+    int exit_code: 退出码
     不返回
 */
 uint64 sys_exit()
 {
+    int exit_code;
+    // 用 arg_uint32 替代缺失的 arg_int，类型强转兼容有符号退出码
+    arg_uint32(0, (uint32 *)&exit_code);
 
+    proc_exit(exit_code); // 调用proc.c中实现的proc_exit函数，永不返回
+
+    return 0; //  unreachable
 }
 
 /*
-    让进程睡眠一段时间
-    uint32 ntick (1个tick大约0.1秒)
-    成功返回0
-*/
-uint64 sys_sleep()
-{
-
-}
-
-/*
-    返回当前进程的pid
+    返回当前进程的PID
+    返回：当前进程PID
 */
 uint64 sys_getpid()
 {
+    proc_t *p = myproc();
+    assert(p != NULL, "sys_getpid: no current process");
 
+    return (uint64)p->pid;
 }

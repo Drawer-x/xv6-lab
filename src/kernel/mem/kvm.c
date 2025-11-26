@@ -124,7 +124,7 @@ void kvm_init()
     vm_mappages(kernel_pgtbl, UART_BASE, UART_BASE, PGSIZE, PTE_R | PTE_W);
 
     // 映射CLINT
-    vm_mappages(kernel_pgtbl, CLINT_BASE, CLINT_BASE, 0x10000, PTE_R | PTE_W);
+    vm_mappages(kernel_pgtbl, CLINT_BASE, CLINT_BASE, 0xc000, PTE_R | PTE_W);
 
     // 映射PLIC
     vm_mappages(kernel_pgtbl, PLIC_BASE, PLIC_BASE, 0x400000, PTE_R | PTE_W);
@@ -147,16 +147,19 @@ void kvm_init()
 
     // 映射trampoline
     vm_mappages(kernel_pgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
-
-    // 只为单个进程（进程0）分配内核栈
-    void *kstack_pa = pmem_alloc(false); // 分配2个物理页（8KB）作为内核栈
-    if (kstack_pa == NULL) {
-        panic("kvm_init: alloc kstack failed");  // 分配失败时 panic
+    // 为所有进程分配和映射内核栈（每个进程2页=8KB）
+    // 前提：内核初始化阶段物理内存无碎片，pmem_alloc(true)会按地址递增分配连续页
+    for (int i = 0; i < N_PROC; i++) {
+        // 关键修正：用in_kernel=true分配内核专属页，避免用户进程访问
+        void *kstack_pa = pmem_alloc(true);
+        if (kstack_pa == NULL) {
+            panic("kvm_init: alloc kstack failed");
+        }
+        // 映射：VA=KSTACK(i) → PA=kstack_pa（起始页），大小2*PGSIZE
+        // 依赖：pmem_alloc(true)返回的页与其下一个页（pa+PGSIZE）连续（无碎片时成立）
+        vm_mappages(kernel_pgtbl, KSTACK(i), (uint64)kstack_pa, 2 * PGSIZE, PTE_R | PTE_W);
     }
-    // 将物理地址映射到该进程的内核栈虚拟地址，大小2页，权限读写
-    vm_mappages(kernel_pgtbl, KSTACK(0), (uint64)kstack_pa, 2 * PGSIZE, PTE_R | PTE_W);
 }
-
 // 每个CPU都需要调用, 从不使用页表切换到使用内核页表
 void kvm_inithart()
 {

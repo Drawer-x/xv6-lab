@@ -3,10 +3,10 @@ target/kernel/syscall/syscall.o: src/kernel/syscall/syscall.c \
  src/kernel/syscall/../arch/type.h src/kernel/syscall/method.h \
  src/kernel/syscall/../lib/mod.h src/kernel/syscall/../lib/type.h \
  src/kernel/syscall/../lib/../proc/type.h \
+ src/kernel/syscall/../lib/../proc/../lock/type.h \
  /usr/lib/gcc-cross/riscv64-linux-gnu/11/include/stdarg.h \
  src/kernel/syscall/../lib/method.h \
  src/kernel/syscall/../lib/../lock/mod.h \
- src/kernel/syscall/../lib/../lock/type.h \
  src/kernel/syscall/../lib/../lock/method.h \
  src/kernel/syscall/../lib/../lock/../arch/mod.h \
  src/kernel/syscall/../lib/../lock/../arch/method.h \
