@@ -118,7 +118,6 @@ void kvm_init()
     // 分配内核页表根物理页
     kernel_pgtbl = (pgtbl_t)pmem_alloc(true);
     assert(kernel_pgtbl != NULL, "kvm_init: page_alloc failed");
-    memset(kernel_pgtbl, 0, PGSIZE);
 
     // 映射UART
     vm_mappages(kernel_pgtbl, UART_BASE, UART_BASE, PGSIZE, PTE_R | PTE_W);

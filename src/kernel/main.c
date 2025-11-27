@@ -38,7 +38,7 @@ int main()
     }
 
     proc_scheduler();
-
+    //timer_init();
     panic("main: never back!");
     return 0;
 }
