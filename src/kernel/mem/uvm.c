@@ -437,6 +437,7 @@ static void copy_range(pgtbl_t old, pgtbl_t new, uint64 begin, uint64 end)
     }
 }
 
+
 // 拷贝页表 (拷贝并不包括 trapframe 和 trampoline)
 // 拷贝的页表管理的物理页是原来页表的复制品
 void uvm_copy_pgtbl(pgtbl_t old, pgtbl_t new, uint64 heap_top, uint64 ustack_npage, mmap_region_t *mmap)
@@ -512,18 +513,4 @@ void uvm_copy_pgtbl(pgtbl_t old, pgtbl_t new, uint64 heap_top, uint64 ustack_npa
 
         tmp = tmp->next;
     }
-
-    // -------------------------- 4. 复制trapframe（原有逻辑不变）--------------------------
-    pte_t *old_pte = vm_getpte(old, TRAPFRAME, false);
-    assert(old_pte != NULL && (*old_pte & PTE_V), "uvm_copy_pgtbl: trapframe not found");
-    uint64 trapframe_pa = PTE_TO_PA(*old_pte);
-    uint64 new_trapframe_pa = (uint64)pmem_alloc(false);
-    assert(new_trapframe_pa != 0, "uvm_copy_pgtbl: alloc trapframe failed");
-    memmove((void*)new_trapframe_pa, (void*)trapframe_pa, PGSIZE);
-    vm_mappages(new, TRAPFRAME, new_trapframe_pa, PGSIZE, PTE_FLAGS(*old_pte) | PTE_V);
-
-    // -------------------------- 5. 映射trampoline（原有逻辑不变）--------------------------
-    old_pte = vm_getpte(old, TRAMPOLINE, false);
-    assert(old_pte != NULL && (*old_pte & PTE_V), "uvm_copy_pgtbl: trampoline not found");
-    vm_mappages(new, TRAMPOLINE, PTE_TO_PA(*old_pte), PGSIZE, PTE_FLAGS(*old_pte) | PTE_V);
 }

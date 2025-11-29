@@ -353,7 +353,19 @@ uint64 sys_exit()
 
     return 0; //  unreachable
 }
-
+/*
+    让进程睡眠一段时间
+    uint32 ntick (1个tick大约0.1秒)
+    成功返回0
+*/
+uint64 sys_sleep()
+{
+    uint32 ntick;
+    arg_uint32(0, &ntick);
+    
+    timer_wait(ntick);
+    return 0;
+}
 /*
     返回当前进程的PID
     返回：当前进程PID

@@ -127,17 +127,3 @@ void timer_wait(uint64 ntick)
     }
 }
 
-// -------------------------- 系统调用实现（sys_sleep）--------------------------
-// 注：该函数需注册到系统调用表，供用户态调用
-uint64 sys_sleep(uint64 ntick)
-{
-    // 1. 检查当前进程状态（必须是运行态）
-    proc_t *p = mycpu()->proc;
-    assert(p != NULL && p->state == RUNNING, "sys_sleep: not running");
-
-    // 2. 调用timer_wait，让进程睡眠ntick个时钟周期
-    timer_wait(ntick);
-
-    // 3. 睡眠结束，返回0（成功）
-    return 0;
-}

@@ -137,6 +137,10 @@ proc_t *proc_alloc()
     回收一个进程结构体并释放它包含的资源
     tips: 调用者需要持有进程锁
 */
+/* 
+    回收一个进程结构体并释放它包含的资源
+    tips: 调用者需要持有进程锁
+*/
 void proc_free(proc_t *p)
 {
     // 前置断言：保证输入合法性（调用者必须持锁）
@@ -242,14 +246,17 @@ pgtbl_t proc_pgtbl_init(uint64 trapframe_pa)
     code + data (1 page)
     empty space (1 page) 最低的4096字节 不分配物理页，同时不可访问
 */
-void proc_make_first()//注释掉部分内存锁有问题
+void proc_make_first()
 {
-    // 分配零号进程（proc_alloc返回时持有进程锁）
+    // 用户栈地址定义（替换原有USTACK_TOP/USTACK_BOT）
+    #define USTACK (TRAPFRAME - PGSIZE)
+
+    // 使用 proc_alloc 申请第一个进程
     proczero = proc_alloc();
     assert(proczero != NULL, "proc_make_first: proczero alloc failed");
     proc_t *p = proczero;
 
-    // 1. 初始化进程名
+    // 设置进程名称
     const char *proc_name = "proczero";
     uint32 name_max_len = sizeof(p->name) - 1; // 预留终止符空间
     uint32 name_len = 0;
@@ -270,17 +277,7 @@ void proc_make_first()//注释掉部分内存锁有问题
         memset(p->name + name_len + 1, 0, name_max_len - name_len);
     }
 
-    // // 2. 分配并初始化trapframe
-    // void *tf_pa = pmem_alloc(true);
-    // assert(tf_pa != NULL && (uint64)tf_pa != 0, "proc_make_first: trapframe alloc failed");
-    // memset(tf_pa, 0, PGSIZE); // 内核态直接清零，无权限风险
-    // p->tf = (trapframe_t *)tf_pa;
-
-    // // 3. 创建用户页表（关联trapframe映射）
-    // p->pgtbl = proc_pgtbl_init((uint64)tf_pa);
-    // assert(p->pgtbl != NULL, "proc_make_first: pgtbl init failed");
-
-    // 4. 分配并初始化用户代码页（替换 uvm_copyin 拷贝代码）
+    // 分配用户代码页放在 USER_BASE
     void *ucode_pa = pmem_alloc(false);
     assert(ucode_pa != NULL && (uint64)ucode_pa != 0, "proc_make_first: initcode page alloc failed");
     memset(ucode_pa, 0, PGSIZE); // 先清零物理页
@@ -296,41 +293,33 @@ void proc_make_first()//注释掉部分内存锁有问题
            "proc_make_first: ucode map param invalid");
     vm_mappages(p->pgtbl, USER_BASE, (uint64)ucode_pa, PGSIZE, PTE_R | PTE_X | PTE_U);
 
-    // 5. 分配并初始化用户栈页（替换 uvm_copyin 清零）
-    const uint64 USTACK_TOP = USER_BASE + 8 * PGSIZE;
-    const uint64 USTACK_BOT = USTACK_TOP - PGSIZE;
+    // 分配用户栈（取消USTACK_TOP/USTACK_BOT，改用USTACK宏）
     void *ustack_pa = pmem_alloc(false);
     assert(ustack_pa != NULL && (uint64)ustack_pa != 0, "proc_make_first: ustack page alloc failed");
     memset(ustack_pa, 0, PGSIZE); // 安全清零用户栈
 
-    // 映射用户栈页（前置校验参数，避免无效映射）
-    assert(p->pgtbl != NULL && USTACK_BOT != 0 && (uint64)ustack_pa != 0,
+    // 映射用户栈页（使用USTACK宏替代原USTACK_BOT）
+    assert(p->pgtbl != NULL && USTACK != 0 && (uint64)ustack_pa != 0,
            "proc_make_first: ustack map param invalid");
-    vm_mappages(p->pgtbl, USTACK_BOT, (uint64)ustack_pa, PGSIZE, PTE_R | PTE_W | PTE_U);
+    vm_mappages(p->pgtbl, USTACK, (uint64)ustack_pa, PGSIZE, PTE_R | PTE_W | PTE_U);
     p->ustack_npage = 1;
-    p->heap_top = USTACK_BOT; // 堆顶初始化为用户栈底
+    p->heap_top = USER_BASE + PGSIZE; // 对齐参考版的堆顶初始化
 
-    // // 6. 初始化内核栈和上下文（补充地址合法性校验）
-    // p->kstack = KSTACK(0);
-    // assert(p->kstack != 0, "proc_make_first: kstack address invalid");
-    // p->ctx.sp = p->kstack + PGSIZE; // 内核栈顶（向下生长）
-    // p->ctx.ra = (uint64)trap_user_return; // 首次切换到用户态的返回入口
-
-    // 7. 初始化陷阱帧（核心：保留 user_to_kern_satp，标准RISC-V内核必需）
+    // 填写 trapframe 关键字段
     p->tf->user_to_kern_satp = r_satp();
-    p->tf->user_to_kern_sp = p->kstack + PGSIZE;
+    // 对齐参考版的内核栈地址计算方式
+    int proc_id = p - proc_list;
+    p->tf->user_to_kern_sp = KSTACK(proc_id) + PGSIZE;  // 内核栈顶
+    extern void trap_user_handler(); // 补充参考版的extern声明
     p->tf->user_to_kern_trapvector = (uint64)trap_user_handler;
     p->tf->user_to_kern_epc = USER_BASE; // 用户态入口（initcode起始）
     p->tf->user_to_kern_hartid = r_tp();  // 当前核ID
-    p->tf->sp = USTACK_TOP;              // 用户栈顶
+    p->tf->sp = USTACK + PGSIZE; // 改用USTACK宏计算用户栈顶
 
-    // 8. 绑定当前CPU到零号进程（补充CPU指针校验）
-    cpu_t *c = mycpu();
-    assert(c != NULL, "proc_make_first: get mycpu failed");
-    c->proc = p;
+    // 状态设置为 RUNNABLE（等待调度器调度）
     p->state = RUNNABLE;//
 
-    // 释放进程锁（锁闭环，适配proc_alloc持锁返回的语义）
+    // 释放进程锁(proc_alloc 返回时持有锁)
     spinlock_release(&p->lk);
 }
 
@@ -391,15 +380,15 @@ int proc_fork()
 
     // 3. 建立父子关系
     child->parent = parent;
-
+    // 核心修正：将陷阱帧中内核栈指针从父进程地址替换为子进程独立内核栈的栈顶
+    // PGSIZE是页大小（如4096），child->kstack是内核栈基址，+PGSIZE指向栈顶（RISC-V栈向下生长）
+    child->tf->user_to_kern_sp = child->kstack + PGSIZE;
     // 4. 解锁子进程，设为可运行（proc_alloc默认初始化state为RUNNABLE）
     spinlock_release(&child->lk);
 
     // 父进程返回子进程PID
     return child->pid;
 }
-
-
 /*
     进程主动放弃CPU控制权
     RUNNING->RUNNABLE
@@ -422,6 +411,7 @@ void proc_yield()
     proc_sched();
     spinlock_release(&p->lk);
 }
+
 /*
     唤醒等待呼叫的进程
     由proc_exit调用
@@ -483,7 +473,6 @@ static void proc_reparent(proc_t *parent)
         spinlock_release(&p->lk);
     }
 }
-
 /*
     进程退出
     RUNNING -> ZOMBIE
@@ -568,7 +557,6 @@ int proc_wait(uint64 user_addr)
         intr_on();
     }
 }
-
 /*
     进程等待sleep_space对应的资源, 进入睡眠状态
     RUNNING -> SLEEPING
@@ -604,8 +592,6 @@ void proc_sleep(void *sleep_space, spinlock_t *lock)
 */
 void proc_wakeup(void *sleep_space)
 {
-    intr_off(); // 禁用中断，避免唤醒过程被打断
-
     // 扫描所有进程，唤醒等待该资源的SLEEPING进程
     for (int i = 0; i < N_PROC; i++) {
         proc_t *p = &proc_list[i];
@@ -619,32 +605,36 @@ void proc_wakeup(void *sleep_space)
 
         spinlock_release(&p->lk);
     }
-
-    intr_on();
 }
 
 /* 
     用户进程切换到调度器
     tips: 调用者保证持有当前进程的锁
 */
+/* 
+    用户进程切换到调度器
+    tips: 调用者保证持有当前进程的锁
+*/
 void proc_sched()
 {
-    cpu_t *c = mycpu();
-    proc_t *p = c->proc;
-
-    // 断言检查：确保当前进程状态合法
-    assert(p != NULL, "proc_sched: no running proc");
-    assert(spinlock_holding(&p->lk), "proc_sched: not holding proc lock");
-    assert(p->state != RUNNING, "proc_sched: proc is still running");
-
-    // 解除CPU与进程的绑定
-    c->proc = NULL;
-
-    // 关键：切换到调度器（原生进程）
-    swtch(&p->ctx, (context_t*)__builtin_frame_address(0));
-
-    // 切换回来后：重新绑定CPU与进程
-    c->proc = p;
+    cpu_t *c = mycpu(); // 修复点1：提前获取CPU结构体，避免多次调用mycpu()
+    proc_t *p = c->proc; // 修复点2：从CPU获取进程，而非myproc()，避免上下文不一致
+    
+    // 修复点3：调整断言顺序，先校验p非空，再校验锁
+    assert(p != NULL, "proc_sched: no process running");
+    assert(spinlock_holding(&p->lk), "proc_sched: not holding lock");
+    assert(p->state != RUNNING, "proc_sched: process still in RUNNING state"); // 新增：确保进程状态已切换
+    
+    // 修复点6：校验调度器上下文合法性（核心：避免跳转到非法地址）
+    assert(c->ctx.sp != 0 && c->ctx.ra != 0, "proc_sched: invalid scheduler ctx");
+    
+    // 修复点7：校验进程上下文合法性（避免切换后sepc非法）
+    assert(p->ctx.ra != 0 && p->ctx.sp != 0, "proc_sched: invalid process ctx");
+    // assert(p->ctx.sp >= p->kstack && p->ctx.sp < p->kstack + PGSIZE, 
+    //        "proc_sched: process sp out of kstack");
+    
+    // 保存当前进程的上下文,切换到调度器的上下文
+    swtch(&p->ctx, &c->ctx);
 }
 
 /* 

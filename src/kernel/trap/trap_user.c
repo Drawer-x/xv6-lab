@@ -88,7 +88,7 @@ void trap_user_return()
 {
 	proc_t *p = myproc();
 	trapframe_t *tf = p->tf;
-
+	tf->user_to_kern_hartid = mycpuid();
 	// stvec -> 用户向量（高地址）
 	uint64 uservec_va = TRAMPOLINE + ((uint64)user_vector - (uint64)trampoline);
 	w_stvec(uservec_va);
