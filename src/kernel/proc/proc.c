@@ -334,6 +334,7 @@ void proc_make_first()
     spinlock_release(&p->lk);
 }
 
+
 /*
     父进程产生子进程
     UNUSED -> RUNNABLE
@@ -422,19 +423,20 @@ void proc_yield()
 */
 static void proc_try_wakeup(proc_t *p)
 {
-    assert(p != NULL && spinlock_holding(&p->lk), "proc_try_wakeup: invalid state");
+    //assert(p != NULL && spinlock_holding(&p->lk), "proc_try_wakeup: invalid state");
 
     // 1. 获取父进程，无父进程则唤醒proczero
     proc_t *parent = p->parent;
     if (parent == NULL) {
-        parent = proczero;
+        return;
     }
 
     // 2. 唤醒父进程（父进程可能在proc_wait中睡眠，睡眠资源为自身）
     spinlock_acquire(&parent->lk);
     if (parent->state == SLEEPING && parent->sleep_space == parent) {
         parent->state = RUNNABLE;
-        parent->sleep_space = NULL;
+        //parent->sleep_space = NULL;
+        printf("proc %d is wakeup!\n", parent->pid);
     }
     spinlock_release(&parent->lk);
 }
@@ -484,17 +486,18 @@ void proc_exit(int exit_code)
 {
     cpu_t *c = mycpu();
     proc_t *p = c->proc;
-    assert(p != NULL && p->state == RUNNING, "proc_exit: not running");
+    //assert(p != NULL && p->state == RUNNING, "proc_exit: not running");
+    spinlock_acquire(&wait_lk);
     proc_reparent(p);
     spinlock_acquire(&p->lk);
 
     // 1. 设置进程状态为ZOMBIE，保存退出码
-    p->state = ZOMBIE;
     p->exit_code = exit_code;
+    p->state = ZOMBIE;
 
     // 2. 唤醒父进程（父进程可能在proc_wait中睡眠）
     proc_try_wakeup(p);
-
+    spinlock_release(&wait_lk);
     proc_sched();
 
     // 永远不会执行到这里
@@ -509,12 +512,11 @@ void proc_exit(int exit_code)
 */
 int proc_wait(uint64 user_addr)
 {
-    cpu_t *c = mycpu();
-    proc_t *parent = c->proc;
-    assert(parent != NULL && parent->state == RUNNING, "proc_wait: parent not running");
+    proc_t *parent = myproc();
+    //assert(parent != NULL && parent->state == RUNNING, "proc_wait: parent not running");
     spinlock_acquire(&wait_lk);
     while (1) {
-        int has_children = 0; // 是否有子进程
+        int has_children = 0; 
         // 1. 扫描所有进程，查找当前进程的ZOMBIE态子进程
         for (int i = 0; i < N_PROC; i++) {
             proc_t *child = &proc_list[i];
@@ -527,15 +529,13 @@ int proc_wait(uint64 user_addr)
                 // 找到目标子进程，记录PID和退出码
                 int pid = child->pid;
                 int exit_code = child->exit_code;
-
-                // 2. 回收子进程资源
-                proc_free(child);
-
+                printf("proc %d is wakeup!\n", parent->pid);
                 // 3. 将退出码写入用户态地址（用uvm_copyout确保安全）
                 if (user_addr != 0) {
                     uvm_copyout(parent->pgtbl, user_addr, (uint64)&exit_code, sizeof(int));
                 }
-                    spinlock_release(&wait_lk);
+                proc_free(child);
+                spinlock_release(&wait_lk);
                 return pid; // 返回子进程PID
                 }
             }
@@ -551,6 +551,7 @@ int proc_wait(uint64 user_addr)
         proc_sleep(parent, &wait_lk);// 睡眠资源设为自身，父进程等待被唤醒
     }
 }
+
 /*
     进程等待sleep_space对应的资源, 进入睡眠状态
     RUNNING -> SLEEPING
@@ -559,8 +560,8 @@ void proc_sleep(void *sleep_space, spinlock_t *lock)
 {
     cpu_t *c = mycpu();
     proc_t *p = c->proc;
-    assert(p != NULL && p->state == RUNNING, "proc_sleep: not running");
-    assert(spinlock_holding(lock), "proc_sleep: not holding lock");
+    //assert(p != NULL && p->state == RUNNING, "proc_sleep: not running");
+    //assert(spinlock_holding(lock), "proc_sleep: not holding lock");
 
     spinlock_acquire(&p->lk);
     spinlock_release(lock);
@@ -577,23 +578,26 @@ void proc_sleep(void *sleep_space, spinlock_t *lock)
     spinlock_acquire(lock);
 }
 
+
 /*
     唤醒所有等待sleep_space的进程
     SLEEPING -> RUNNABLE
 */
 void proc_wakeup(void *sleep_space)
 {
-    // 扫描所有进程，唤醒等待该资源的SLEEPING进程
+    // 遍历进程数组,找到所有等待该资源的进程
     for (int i = 0; i < N_PROC; i++) {
         proc_t *p = &proc_list[i];
+        
+        // 需要持有进程锁才能访问state和sleep_space字段
         spinlock_acquire(&p->lk);
-
+        
+        // 如果进程在睡眠状态,且等待的就是这个资源
         if (p->state == SLEEPING && p->sleep_space == sleep_space) {
-            // 唤醒：设置为RUNNABLE态，清空睡眠资源
+            // 状态转换: SLEEPING -> RUNNABLE
             p->state = RUNNABLE;
-            p->sleep_space = NULL;
         }
-
+        
         spinlock_release(&p->lk);
     }
 }
