@@ -117,13 +117,13 @@ uint64 sys_brk()
 
     if (new_top == 0) {
         // 查询当前堆顶
-        DEBUG_PRINT(look, cur);
+        //DEBUG_PRINT(look, cur);
         return cur;
     }
 
     if (new_top == cur) {
         // 不变
-        DEBUG_PRINT(equal, cur);
+        //DEBUG_PRINT(equal, cur);
         return cur;
     }
 
@@ -131,21 +131,21 @@ uint64 sys_brk()
         // 增长
         uint64 ret = uvm_heap_grow(p->pgtbl, cur, (uint32)(new_top - cur));
         if (ret == (uint64)-1) {
-            DEBUG_PRINT(grow, cur);
+            //DEBUG_PRINT(grow, cur);
             return (uint64)-1;
         }
         p->heap_top = ret;
-        DEBUG_PRINT(grow, ret);
+        //DEBUG_PRINT(grow, ret);
         return ret;
     } else {
         // 收缩
         uint64 ret = uvm_heap_ungrow(p->pgtbl, cur, (uint32)(cur - new_top));
         if (ret == (uint64)-1) {
-            DEBUG_PRINT(ungrow, cur);
+            //DEBUG_PRINT(ungrow, cur);
             return (uint64)-1;
         }
         p->heap_top = ret;
-        DEBUG_PRINT(ungrow, ret);
+        //DEBUG_PRINT(ungrow, ret);
         return ret;
     }
 }

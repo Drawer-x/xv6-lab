@@ -141,6 +141,10 @@ proc_t *proc_alloc()
     回收一个进程结构体并释放它包含的资源
     tips: 调用者需要持有进程锁
 */
+/* 
+    申请一个UNUSED进程结构体(返回时带锁)
+    并执行通用的初始化逻辑
+*/
 void proc_free(proc_t *p)
 {
     // 前置断言：保证输入合法性（调用者必须持锁）
@@ -148,72 +152,79 @@ void proc_free(proc_t *p)
     assert(spinlock_holding(&p->lk), "proc_free: not holding proc lock");
     assert(p->state == ZOMBIE || p->state == UNUSED, "proc_free: invalid state");
 
-    // 1. 释放用户页表（先释放页表，避免mmap映射依赖页表导致释放失败）
+    // 临时变量：缓存可分配物理内存范围（避免重复计算）
+    const uint64 phys_begin = (uint64)ALLOC_BEGIN;
+    const uint64 phys_end = (uint64)ALLOC_END;
+
+    // 释放用户页表及其管理的所有物理页（基于vm_unmappages简化实现）
     if (p->pgtbl != NULL) {
-        uvm_destroy_pgtbl(p->pgtbl);
-        p->pgtbl = NULL;
-    }
+        // 1. 释放用户栈（复用vm_unmappages，自动处理页表遍历/校验/释放）
+        if (p->ustack_npage > 0) {
+            uint64 ustack_bottom = TRAPFRAME - p->ustack_npage * PGSIZE;
+            vm_unmappages(p->pgtbl, ustack_bottom, p->ustack_npage * PGSIZE, true);
+        }
 
-    // 2. 释放mmap映射区域（修复内存泄漏+非法访问）
-    mmap_region_t *mmap = p->mmap;
-    while (mmap != NULL) {
-        mmap_region_t *next = mmap->next; // 先保存下一个节点，避免释放后丢失
-        
-        // 遍历释放mmap区域的物理页（增加空指针/有效性校验）
-        if (mmap->begin != 0 && mmap->npages > 0) {
-            for (uint32 i = 0; i < mmap->npages; i++) {
-                uint64 va = mmap->begin + i * PGSIZE;
-                // 跳过非法虚拟地址
-                if (va == 0) continue;
-                
-                pte_t *pte = vm_getpte(p->pgtbl, va, false);
-                // 校验页表项有效且已映射，避免重复释放
-                if (pte != NULL && (*pte & PTE_V)) {
-                    uint64 pa = PTE_TO_PA(*pte);
-                    if (pa != 0) { // 物理地址非空才释放
-                        pmem_free(pa, false);
-                        // 清空页表项，避免野指针访问
-                        *pte = 0;
-                    }
-                }
+        // 2. 释放堆空间（复用vm_unmappages，自动计算范围+释放）
+        if (p->heap_top > USER_BASE) {
+            uint64 heap_size = p->heap_top - USER_BASE;
+            vm_unmappages(p->pgtbl, USER_BASE, heap_size, true);
+        }
+
+        // 3. 释放所有mmap区域（复用vm_unmappages简化遍历逻辑）
+        mmap_region_t *mmap = p->mmap;
+        while (mmap != NULL) {
+            mmap_region_t *next = mmap->next; // 先保存下一个节点，避免释放当前节点后丢失链表
+            // 释放mmap映射的物理页（vm_unmappages自动处理合法性校验）
+            if (mmap->begin != 0 && mmap->npages > 0) {
+                vm_unmappages(p->pgtbl, mmap->begin, mmap->npages * PGSIZE, true);
             }
+            // 释放mmap节点本身（保留地址合法性校验）
+            uint64 mmap_node_pa = (uint64)mmap;
+            if (mmap_node_pa % PGSIZE == 0 && mmap_node_pa >= phys_begin && mmap_node_pa < phys_end) {
+                pmem_free(mmap_node_pa, true);
+            }
+            mmap = next;
         }
-        
-        // 释放mmap_region_t节点本身（原代码遗漏，导致内存泄漏）
-        if (mmap != NULL) {
-            pmem_free((uint64)mmap, true); // 假设节点由pmem_alloc分配
-        }
-        
-        mmap = next;
-    }
-    p->mmap = NULL; // 清空链表头，避免悬空指针
+        p->mmap = NULL; // 清空链表头，避免悬空指针
 
-    // 3. 释放trapframe（增加非空校验）
+        // 4. 解除trapframe和trampoline映射（不释放物理页，复用vm_unmappages）
+        vm_unmappages(p->pgtbl, TRAPFRAME, PGSIZE, false);
+        vm_unmappages(p->pgtbl, TRAMPOLINE, PGSIZE, false);
+
+        // 5. 释放页表本身占用的物理页（保留核心校验）
+        uint64 pgtbl_pa = (uint64)p->pgtbl;
+        if (pgtbl_pa % PGSIZE == 0 && pgtbl_pa >= phys_begin && pgtbl_pa < phys_end) {
+            uvm_destroy_pgtbl(p->pgtbl); // 销毁页表结构，释放页表层级资源
+            pmem_free(pgtbl_pa, true);   // 释放页表占用的物理内存页
+        }
+        p->pgtbl = NULL; // 清空页表指针，避免野指针访问
+    }
+
+    // 释放trapframe（保留核心地址合法性校验）
     if (p->tf != NULL) {
-        pmem_free((uint64)p->tf, true);
-        p->tf = NULL;
+        uint64 tf_pa = (uint64)p->tf;
+        if (tf_pa % PGSIZE == 0 && tf_pa >= phys_begin && tf_pa < phys_end) {
+            pmem_free(tf_pa, true); // 释放trapframe占用的物理页
+        }
+        p->tf = NULL; // 清空trapframe指针，避免野指针
     }
 
-    // 4. 释放内核栈（若为动态分配，需补充kfree；静态分配则重置地址）
-    if (p->kstack != 0) {
-        // 假设内核栈由kalloc分配，需调用对应释放接口；静态栈则仅重置
-        // kfree((void*)p->kstack); // 根据实际分配方式选择
-        p->kstack = 0;
-    }
-
-    // 5. 清零进程核心字段（改用memset，安全的内核态清零）
+    // 清空其他字段（保持原有逻辑）
+    p->pid = 0;                  // 重置进程ID
+    p->parent = NULL;            // 解除父进程关联
+    p->exit_code = 0;            // 清空退出码
+    p->sleep_space = NULL;       // 清空睡眠等待空间
+    p->heap_top = 0;             // 重置堆顶地址
+    p->ustack_npage = 0;         // 重置用户栈页数
+    p->kstack = 0;               // 重置内核栈地址
     memset(p->name, 0, sizeof(p->name));       // 进程名清零
-    memset(&p->ctx, 0, sizeof(context_t));     // 上下文清零
-    memset(&p->exit_code, 0, sizeof(p->exit_code)); // 退出码清零
-
-    // 6. 重置进程状态和关联字段（规范初始化）
-    p->pid = 0;
+    memset(&p->ctx, 0, sizeof(context_t));     // 执行上下文清零
+    
+    // 状态设置为UNUSED（标记进程结构体可复用）
     p->state = UNUSED;
-    p->parent = NULL;
-    p->exit_code = 0;
-    p->sleep_space = NULL;
-    p->heap_top = 0;
-    p->ustack_npage = 0;
+    
+    // 释放进程锁（调用者持有的锁在此处释放，恢复并发访问）
+    spinlock_release(&p->lk);
 }
 
 
@@ -361,15 +372,7 @@ int proc_fork()
 
     // ===== 替代uvm_copyin：手动逐字段拷贝陷阱帧（核心字段）=====
     if (parent->tf != NULL && child->tf != NULL) {
-        // 仅拷贝陷阱帧核心字段（按需扩展，保证子进程能正常运行）
-        child->tf->user_to_kern_satp = parent->tf->user_to_kern_satp;
-        child->tf->user_to_kern_sp = parent->tf->user_to_kern_sp;
-        child->tf->user_to_kern_trapvector = parent->tf->user_to_kern_trapvector;
-        child->tf->user_to_kern_epc = parent->tf->user_to_kern_epc;
-        child->tf->user_to_kern_hartid = parent->tf->user_to_kern_hartid;
-        child->tf->sp = parent->tf->sp; // 子进程用户栈顶与父进程一致
-        child->tf->a0 = 0; // 子进程返回值设为0（单独赋值，更清晰）
-        // 若有其他核心字段（如通用寄存器a1-a7、sepc等），按需逐字段拷贝
+    *child->tf = *parent->tf;
     }
 
     // ===== 替代memcpy：手动处理内核栈（仅初始化栈顶，简化实现）=====
@@ -492,19 +495,6 @@ void proc_exit(int exit_code)
     // 2. 唤醒父进程（父进程可能在proc_wait中睡眠）
     proc_try_wakeup(p);
 
-    // 3. 处理子进程过继：若当前进程有子进程，将子进程过继给proczero
-    for (int i = 0; i < N_PROC; i++) {
-        proc_t *child = &proc_list[i];
-        spinlock_acquire(&child->lk);
-        if (child->state != UNUSED && child->parent == p) {
-            child->parent = proczero; // 过继给根进程proczero
-        }
-        spinlock_release(&child->lk);
-    }
-
-    // 4. 释放CPU，切换到调度器（进程已退出，不再执行）
-    c->proc = NULL;
-    spinlock_release(&p->lk);
     proc_sched();
 
     // 永远不会执行到这里
@@ -522,39 +512,43 @@ int proc_wait(uint64 user_addr)
     cpu_t *c = mycpu();
     proc_t *parent = c->proc;
     assert(parent != NULL && parent->state == RUNNING, "proc_wait: parent not running");
-
+    spinlock_acquire(&wait_lk);
     while (1) {
-        intr_off();// 禁用中断，避免扫描被打断
-
+        int has_children = 0; // 是否有子进程
         // 1. 扫描所有进程，查找当前进程的ZOMBIE态子进程
         for (int i = 0; i < N_PROC; i++) {
             proc_t *child = &proc_list[i];
             spinlock_acquire(&child->lk);
 
-            if (child->state == ZOMBIE && child->parent == parent) {
+            if (child->parent == parent) {
+                has_children = 1;
+                // 找到一个ZOMBIE状态的子进程
+                if (child->state == ZOMBIE) {
                 // 找到目标子进程，记录PID和退出码
                 int pid = child->pid;
                 int exit_code = child->exit_code;
 
                 // 2. 回收子进程资源
                 proc_free(child);
-                spinlock_release(&child->lk);
-                intr_on();
 
                 // 3. 将退出码写入用户态地址（用uvm_copyout确保安全）
                 if (user_addr != 0) {
                     uvm_copyout(parent->pgtbl, user_addr, (uint64)&exit_code, sizeof(int));
                 }
-
+                    spinlock_release(&wait_lk);
                 return pid; // 返回子进程PID
+                }
             }
 
             spinlock_release(&child->lk);
         }
-
+        // 如果没有子进程,返回-1
+        if (!has_children) {
+            spinlock_release(&wait_lk);
+            return -1;
+        }
         // 2. 未找到ZOMBIE子进程，进入睡眠态（等待子进程退出唤醒）
-        proc_sleep(parent, &parent->lk); // 睡眠资源设为自身，父进程等待被唤醒
-        intr_on();
+        proc_sleep(parent, &wait_lk);// 睡眠资源设为自身，父进程等待被唤醒
     }
 }
 /*
@@ -569,19 +563,16 @@ void proc_sleep(void *sleep_space, spinlock_t *lock)
     assert(spinlock_holding(lock), "proc_sleep: not holding lock");
 
     spinlock_acquire(&p->lk);
-
+    spinlock_release(lock);
     // 1. 绑定睡眠资源，设置状态为SLEEPING
     p->sleep_space = sleep_space;
     p->state = SLEEPING;
 
-    // 2. 释放传入的锁（避免死锁：睡眠时不持有其他锁）
-    spinlock_release(lock);
-
     // 3. 切换到调度器（睡眠进程不再占用CPU）
-    c->proc = NULL;
-    spinlock_release(&p->lk);
-    proc_sched();
 
+    proc_sched();
+    p->sleep_space = NULL;
+    spinlock_release(&p->lk);
     // 4. 被唤醒后，重新获取传入的锁（恢复睡眠前的锁状态）
     spinlock_acquire(lock);
 }
@@ -661,7 +652,7 @@ void proc_scheduler()
                 p->state = RUNNING;
                 // 绑定CPU与进程
                 c->proc = p;
-                printf("proc %d is running...\n", p->pid);
+                //printf("proc %d is running...\n", p->pid);
                 swtch(&c->ctx, &p->ctx);
             }
             spinlock_release(&p->lk);

@@ -65,7 +65,9 @@ int main()
 		int exit_state = 0;
 		syscall(SYS_wait, &exit_state);
 		syscall(SYS_print_str, "parent proc: hello!\n");
+		syscall(SYS_print_str, "num=");
 		syscall(SYS_print_int, pid);
+		syscall(SYS_print_str, "\n");
 		if (exit_state == 1234)
 			syscall(SYS_print_str, "good boy!\n");
 		else
