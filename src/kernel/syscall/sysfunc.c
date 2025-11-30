@@ -161,20 +161,29 @@ uint64 sys_mmap()
     uint64 begin;
     uint32 len;
 
+    // 解析系统调用参数
     arg_uint64(0, &begin);
     arg_uint32(1, &len);
 
+    // 校验长度必须按页对齐
     assert((len % PGSIZE) == 0, "sys_mmap: len not aligned");
 
-    uvm_mmap(begin, len / PGSIZE, PTE_R | PTE_W);
-
     proc_t *p = myproc();
-    printf("[sys_mmap] after mmap:\n");
-    uvm_show_mmaplist(p->mmap);
-    vm_print(p->pgtbl);
-    printf("\n");
+    uint64 npages = len / PGSIZE;
 
-    return 0;
+    // 若begin为0，自动分配可用地址（从堆顶/用户空间空闲区开始）
+    if (begin == 0) {
+        // 简单策略：从进程堆顶向后分配（可根据实际地址布局调整）
+        begin = p->heap_top;
+        // 更新堆顶，避免地址重叠
+        p->heap_top += len;
+    }
+
+    // 执行mmap映射（权限默认读写，可按需调整）
+    uvm_mmap(begin, npages, PTE_R | PTE_W);
+
+    // 返回实际分配的起始地址（核心：不能返回0，要返回映射的地址）
+    return begin;
 }
 
 /*
