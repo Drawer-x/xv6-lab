@@ -656,7 +656,7 @@ void proc_scheduler()
                 p->state = RUNNING;
                 // 绑定CPU与进程
                 c->proc = p;
-                //printf("proc %d is running...\n", p->pid);
+                printf("proc %d is running...\n", p->pid);
                 swtch(&c->ctx, &p->ctx);
             }
             spinlock_release(&p->lk);
