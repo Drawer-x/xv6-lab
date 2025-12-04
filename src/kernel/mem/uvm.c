@@ -358,34 +358,58 @@ uint64 uvm_heap_ungrow(pgtbl_t pgtbl, uint64 cur_heap_top, uint32 len)
 
     return new_top;
 }
-
 // 处理函数栈增长导致的page fault事件
 // 成功返回new_ustack_npage，失败返回-1
 uint64 uvm_ustack_grow(pgtbl_t pgtbl, uint64 old_ustack_npage, uint64 fault_addr)
 {
-    uint64 stack_bottom = TRAPFRAME - old_ustack_npage * PGSIZE;
-    // 移除未使用变量stack_top
-
-    if (fault_addr >= stack_bottom - PGSIZE && fault_addr < stack_bottom) {
-        if (old_ustack_npage + 1 > (16 * 1024 * 1024) / PGSIZE) {
-            return -1;
-        }
-
-        uint64 new_page = (uint64)pmem_alloc(false);
-        if (new_page == 0) return -1;
-        memset((void*)new_page, 0, PGSIZE);
-
-        uint64 new_va = stack_bottom - PGSIZE;
-        // 直接调用，不判断返回值
-        vm_mappages(pgtbl, new_va, new_page, PGSIZE, PTE_R | PTE_W | PTE_U | PTE_V);
-        // 若需要检查失败，可通过其他方式（如后续访问验证）
-
-        return old_ustack_npage + 1;
+    if (fault_addr >= TRAPFRAME || fault_addr < MMAP_END) {
+        return (uint64)-1;
     }
 
-    return -1;
-}
+    uint64 stack_top = TRAPFRAME;  // 栈顶固定（最高地址）
+    uint64 stack_low = stack_top - old_ustack_npage * PGSIZE;  // 栈底（已映射区间下界）
 
+    if (fault_addr >= stack_low && fault_addr < stack_top) {
+        return old_ustack_npage;
+    }
+
+    uint64 need_low = fault_addr & ~(PGSIZE - 1);  // 向下取整到页起始地址
+
+    if (need_low < MMAP_END) {
+        need_low = MMAP_END;
+    }
+
+    uint64 new_npage = (stack_top - need_low + PGSIZE - 1) / PGSIZE;
+    if (new_npage <= old_ustack_npage) {
+        return old_ustack_npage;
+    }
+
+    uint64 add_pages = new_npage - old_ustack_npage;  // 需要新增的页数
+    uint64 map_begin = stack_low - add_pages * PGSIZE;  // 新增映射的起始虚拟地址
+
+    if (map_begin < MMAP_END) {
+        return (uint64)-1;
+    }
+
+    uint64 va;
+    for (va = map_begin; va < stack_low; va += PGSIZE) {
+        // 分配物理页
+        void *pa = pmem_alloc(false);
+        if (pa == NULL) {
+            // 回滚：释放已分配的页（复杂版本核心回滚逻辑）
+            for (uint64 unmap = map_begin; unmap < va; unmap += PGSIZE) {
+                vm_unmappages(pgtbl, unmap, PGSIZE, true);
+            }
+            return (uint64)-1;
+        }
+        // 初始化物理页（简化版保留的逻辑）
+        memset(pa, 0, PGSIZE);
+        // 映射虚拟地址到物理页（带PTE_V，对齐简化版权限）
+        vm_mappages(pgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W | PTE_U | PTE_V);
+    }
+
+    return new_npage;
+}
 /*----------------------part-4: 用户页表管理相关----------------------*/
 
 // 递归释放 页表占用的物理页 和 页表管理的物理页

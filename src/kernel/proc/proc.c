@@ -16,7 +16,6 @@ extern void trap_user_return(); // 从内核切回用户态的入口
 
 // 内核全局的第一个进程（仅 lab-4）
 static proc_t proczero;
-
 /**
  * 分配内核栈页（使用全局 KSTACK 宏，而非动态分配，对齐系统规范）
  */
@@ -34,7 +33,6 @@ static uint64 alloc_kstack_page()
     vm_mappages(kernel_pgtbl, kstack_va, (uint64)kstack_pa, PGSIZE, PTE_R | PTE_W);
     return kstack_va;
 }
-
 /**
  * 为用户进程创建页表（最小初始化：映射trampoline + trapframe）
  */
@@ -61,6 +59,8 @@ pgtbl_t proc_pgtbl_init(uint64 trapframe_pa)
  */
 void proc_make_first()
 {
+
+    #define USTACK (TRAPFRAME - PGSIZE)
     proc_t *p = &proczero;
     memset(p, 0, sizeof(proc_t));
     p->pid = 0;          // 进程0的PID
@@ -69,34 +69,37 @@ void proc_make_first()
     // 1. 分配并初始化trapframe（内核物理页，仅内核访问）
     void *tf_pa = pmem_alloc(true);
     assert(tf_pa != NULL, "proc_make_first: trapframe alloc failed");
-    memset(tf_pa, 0, PGSIZE);
     p->tf = (trapframe_t *)tf_pa; // trapframe VA == PA（内核恒等映射）
 
     // 2. 创建用户页表（映射trampoline + trapframe）
     p->pgtbl = proc_pgtbl_init((uint64)tf_pa);
 
-    // 3. 装载用户代码（initcode）到 USER_BASE（全局标准用户代码VA：0x1000）
-    void *ucode_pa = pmem_alloc(false); // 用户空间物理页（pmem_alloc(false)）
-    assert(ucode_pa != NULL, "proc_make_first: initcode page alloc failed");
-    memset(ucode_pa, 0, PGSIZE);
-    // 复制initcode到用户物理页（限制大小不超过1页）
+    // 分配用户代码页放在 USER_BASE
+    void *ucode_pa = pmem_alloc(false);
+    assert(ucode_pa != NULL && (uint64)ucode_pa != 0, "proc_make_first: initcode page alloc failed");
+    memset(ucode_pa, 0, PGSIZE); // 先清零物理页
+
+    // 用 memmove 拷贝用户初始化代码（兼容内存重叠，内核态直接操作物理页）
     uint32 copy_len = (target_user_initcode_len > PGSIZE) ? PGSIZE : target_user_initcode_len;
-    memmove(ucode_pa, target_user_initcode, copy_len);
-    // 映射用户代码页（RXU权限：用户态可执行、可读）
+    if (copy_len > 0 && target_user_initcode != NULL) {
+        memmove(ucode_pa, (void*)target_user_initcode, copy_len);
+    }
+    // 映射用户代码页（vm_mappages无返回值，前置校验参数合法性）
+    assert(p->pgtbl != NULL && USER_BASE != 0 && (uint64)ucode_pa != 0, 
+           "proc_make_first: ucode map param invalid");
     vm_mappages(p->pgtbl, USER_BASE, (uint64)ucode_pa, PGSIZE, PTE_R | PTE_X | PTE_U);
 
-    // 4. 初始化用户栈（1页，全局标准布局：栈顶=USER_BASE + 8*PGSIZE）
-    const uint64 USTACK_TOP = USER_BASE + 8 * PGSIZE; // 与原PROC0_USTACK_TOP一致，复用全局宏
-    const uint64 USTACK_BOT = USTACK_TOP - PGSIZE;    // 1页栈，栈底=栈顶-4KB
-    // 分配用户栈物理页
+    // 分配用户栈（取消USTACK_TOP/USTACK_BOT，改用USTACK宏）
     void *ustack_pa = pmem_alloc(false);
-    assert(ustack_pa != NULL, "proc_make_first: ustack page alloc failed");
-    memset(ustack_pa, 0, PGSIZE);
-    // 映射用户栈页（RWU权限：用户态可读写）
-    vm_mappages(p->pgtbl, USTACK_BOT, (uint64)ustack_pa, PGSIZE, PTE_R | PTE_W | PTE_U);
-    // 更新进程栈信息
-    p->ustack_npage = 1;          // 初始1页栈（符合要求）
-    p->heap_top = USTACK_BOT;     // 堆顶=栈底（系统约定：堆向上、栈向下）
+    assert(ustack_pa != NULL && (uint64)ustack_pa != 0, "proc_make_first: ustack page alloc failed");
+    memset(ustack_pa, 0, PGSIZE); // 安全清零用户栈
+
+    // 映射用户栈页（使用USTACK宏替代原USTACK_BOT）
+    assert(p->pgtbl != NULL && USTACK != 0 && (uint64)ustack_pa != 0,
+           "proc_make_first: ustack map param invalid");
+    vm_mappages(p->pgtbl, USTACK, (uint64)ustack_pa, PGSIZE, PTE_R | PTE_W | PTE_U);
+    p->ustack_npage = 1;
+    p->heap_top = USER_BASE + PGSIZE; // 对齐参考版的堆顶初始化
 
     // 5. 初始化进程内核栈和上下文
     p->kstack = alloc_kstack_page(); // 内核栈VA（KSTACK(0)）
@@ -109,15 +112,11 @@ void proc_make_first()
     p->tf->user_to_kern_trapvector = (uint64)trap_user_handler; // 用户态trap处理入口
     p->tf->user_to_kern_hartid = r_tp();                // 当前CPU核心ID
     p->tf->user_to_kern_epc = USER_BASE;                // 首次进入用户态的PC（initcode入口）
-    p->tf->sp = USTACK_TOP;                              // 用户态初始栈顶（向下增长）
+    p->tf->sp = USTACK + PGSIZE;                              // 用户态初始栈顶（向下增长）
 
     // 7. 当前CPU绑定进程0
     cpu_t *c = mycpu();
     c->proc = p;
-
-    // 打印调试信息（对齐原格式，使用全局宏确保地址正确）
-    printf("[proc] switch to user: epc=%p, usp=%p, ksp=%p\n",
-           (void*)USER_BASE, (void*)USTACK_TOP, (void*)(p->kstack + PGSIZE));
 
     // 切入用户进程：先切换页表，再通过trap_user_return返回用户态
     trap_user_return(); // 核心切换逻辑（汇编实现：恢复tf寄存器 + sret）
