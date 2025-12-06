@@ -3,6 +3,8 @@
 #include "../lock/method.h"
 #include "../arch/method.h" 
 #include "../lib/mod.h"
+#include "../proc/method.h"   // 提供 proc_yield / proc_sleep / proc_wakeup 等声明
+#include "../fs/method.h"     // 提供 virtio_disk_intr 声明
 
 // 中断信息
 char *interrupt_info[16] = {
@@ -153,22 +155,23 @@ void trap_kernel_handler()
 
 }
 
-// 外设中断处理 (基于PLIC，lab-3只需要识别和处理UART中断)
 void external_interrupt_handler()
 {
     int irq = plic_claim();
 
-    if (irq == UART_IRQ) 
-    {
-        uart_intr();  
-        plic_complete(irq); 
-    }
-    else if (irq != 0)
-    {
+    if (irq == UART_IRQ) {
+        uart_intr();
+        plic_complete(irq);
+    } else if (irq == VIRTIO_IRQ) {
+        // **新增**：磁盘中断
+        virtio_disk_intr();
+        plic_complete(irq);
+    } else if (irq != 0) {
         printf("unexpected external interrupt: irq=%d\n", irq);
-        plic_complete(irq); 
+        plic_complete(irq);
     }
 }
+
 
 // 时钟中断处理 (基于CLINT)
 void timer_interrupt_handler()

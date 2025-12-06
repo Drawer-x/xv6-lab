@@ -1,4 +1,6 @@
 #include "mod.h"
+#include "../proc/method.h"   // 声明 proc_sleep / proc_wakeup
+#include "../mem/method.h"    // 声明 vm_getpte 等内存/页表接口
 
 static __attribute__((aligned(PGSIZE))) disk_t disk;
 

@@ -39,11 +39,20 @@ static int alloc_pid()
 }
 
 /* 释放进程锁 + trap_user_return */
-static void proc_return()
+void proc_return()
 {
+    static int fs_inited = 0;
+
+    // proczero 第一次返回用户态之前，做文件系统初始化
+    if (!fs_inited) {
+        fs_init();
+        fs_inited = 1;
+    }
+
     spinlock_release(&myproc()->lk);
     trap_user_return();
 }
+
 
 /* 进程模块初始化 */
 void proc_init()

@@ -1,6 +1,8 @@
 #include "mod.h"
 #include "../arch/mod.h"
 #include "../mem/mod.h"
+#include "../proc/method.h"   // 提供 proc_yield / proc_sleep / proc_wakeup 等声明
+#include "../fs/method.h"
 
 // in trampoline.S
 extern char trampoline[];  // 内核和用户切换的代码

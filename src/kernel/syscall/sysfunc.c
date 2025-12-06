@@ -386,3 +386,111 @@ uint64 sys_getpid()
 
     return (uint64)p->pid;
 }
+
+/*================= FS / BUFFER / BITMAP 系统调用 =================*/
+
+#include "../fs/mod.h"
+
+uint64 sys_alloc_block()
+{
+    uint32 b = bitmap_alloc_block();
+    return (uint64)b; // 若失败返回 0xFFFFFFFF，由 bitmap 实现保证
+}
+
+uint64 sys_free_block()
+{
+    uint32 b;
+    arg_uint32(0, &b);
+    bitmap_free_block(b);
+    return 0;
+}
+
+uint64 sys_alloc_inode()
+{
+    uint32 ino = bitmap_alloc_inode();
+    return (uint64)ino;
+}
+
+uint64 sys_free_inode()
+{
+    uint32 ino;
+    arg_uint32(0, &ino);
+    bitmap_free_inode(ino);
+    return 0;
+}
+
+uint64 sys_show_bitmap()
+{
+    uint32 which;
+    arg_uint32(0, &which); // 0: data bitmap, 1: inode bitmap
+    bitmap_print(which != 0);
+    return 0;
+}
+
+uint64 sys_get_block()
+{
+    uint32 blockno;
+    arg_uint32(0, &blockno);
+    buffer_t *buf = buffer_get(blockno);
+    return (uint64)buf;  // 作为“句柄”返回给用户
+}
+
+uint64 sys_put_block()
+{
+    uint64 handle;
+    arg_uint64(0, &handle);
+    buffer_t *buf = (buffer_t *)handle;
+    buffer_put(buf);
+    return 0;
+}
+
+uint64 sys_read_block()
+{
+    uint64 handle, uaddr;
+    arg_uint64(0, &handle);
+    arg_uint64(1, &uaddr);
+
+    buffer_t *buf = (buffer_t *)handle;
+
+    // 读取前保证持有睡眠锁（用户必须按正确顺序调用）
+    assert(sleeplock_holding(&buf->slk), "sys_read_block: lock not held");
+
+    // 将 buf->data 拷贝到用户空间
+    proc_t *p = myproc();
+    uvm_copyout(p->pgtbl, uaddr, (uint64)buf->data, BLOCK_SIZE);
+    return 0;
+}
+
+uint64 sys_write_block()
+{
+    uint64 handle, uaddr;
+    arg_uint64(0, &handle);
+    arg_uint64(1, &uaddr);
+
+    buffer_t *buf = (buffer_t *)handle;
+
+    // 写入前保证持有睡眠锁
+    assert(sleeplock_holding(&buf->slk), "sys_write_block: lock not held");
+
+    // 从用户空间拷贝到 buf->data
+    proc_t *p = myproc();
+    uvm_copyin(p->pgtbl, (uint64)buf->data, uaddr, BLOCK_SIZE);
+
+    // 写回磁盘
+    buffer_write(buf);
+    return 0;
+}
+
+uint64 sys_show_buffer()
+{
+    buffer_print_info();
+    return 0;
+}
+
+uint64 sys_flush_buffer()
+{
+    uint32 cnt;
+    arg_uint32(0, &cnt);
+    buffer_freemem(cnt);
+    return 0;
+}

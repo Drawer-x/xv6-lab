@@ -1,20 +1,25 @@
 #include "mod.h"
 #include "../lib/method.h"
+#include "../fs/type.h"   // VIRTIO_IRQ
 
-// PLIC初始化
+// PLIC初始化：设置优先级
 void plic_init()
 {
-    // 设置UART中断优先级
+    // UART
     *(uint32 *)(PLIC_PRIORITY(UART_IRQ)) = 1;
+    // **新增**：VIRTIO 磁盘
+    *(uint32 *)(PLIC_PRIORITY(VIRTIO_IRQ)) = 1;
 }
 
-// PLIC核心初始化
+// PLIC核心初始化：打开 S 模式可见的中断线
 void plic_inithart()
 {
     int hartid = mycpuid();
-    // 使能中断开关
-    *(uint32 *)PLIC_SENABLE(hartid) = (1 << UART_IRQ);
-    // 设置响应阈值
+
+    // 使能外部中断开关（S态）：UART + VIRTIO
+    *(uint32 *)PLIC_SENABLE(hartid) = (1 << UART_IRQ) | (1 << VIRTIO_IRQ);
+
+    // 设置 S 态中断优先级阈值：允许所有优先级 >=1 的中断进入
     *(uint32 *)PLIC_SPRIORITY(hartid) = 0;
 }
 
