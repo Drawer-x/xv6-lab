@@ -30,10 +30,11 @@ typedef struct vring_used_elem {
 } vring_used_elem_t;
 
 typedef struct used_area {
-    uint16 flags;
-    uint16 id;
-    vring_used_elem_t elems[VIRTIO_NUM];
+    uint16 flags;                // 保留
+    uint16 idx;                  // 设备已写入的 ring 下标（递增计数）
+    vring_used_elem_t elems[VIRTIO_NUM];  // 完成队列
 } used_area_t;
+
 
 typedef struct disk {
     // 驱动需要8KB的连续空间, 不适合用pmem_alloc来申请

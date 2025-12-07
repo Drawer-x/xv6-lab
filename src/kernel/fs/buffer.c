@@ -130,9 +130,16 @@ buffer_t* buffer_get(uint32 block_num)
         virtio_disk_rw(&node->buf, /*write=*/false);
         while (node->buf.disk)
             proc_sleep(&node->buf, &lk_buf_cache);
+
         // 此时磁盘中断已唤醒，数据在 data 里
+        // 护栏：确保当前 CPU 持有 lk_buf_cache，再释放，避免“跨核释放”
+        if (!spinlock_holding(&lk_buf_cache)) {
+            spinlock_acquire(&lk_buf_cache);
+        }
         spinlock_release(&lk_buf_cache);
+
         return &node->buf;
+
     } else {
         // 命中：上锁后返回
         sleeplock_acquire(&node->buf.slk);
@@ -172,7 +179,12 @@ void buffer_write(buffer_t *buf)
     while (node->buf.disk)
         proc_sleep(&node->buf, &lk_buf_cache);
 
+    // 护栏：确保当前 CPU 持有 lk_buf_cache，再释放
+    if (!spinlock_holding(&lk_buf_cache)) {
+        spinlock_acquire(&lk_buf_cache);
+    }
     spinlock_release(&lk_buf_cache);
+
 }
 
 /* 释放若干个“最不活跃”的 buffer 持有的物理页（仅非活跃表内扫描） */

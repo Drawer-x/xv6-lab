@@ -176,18 +176,22 @@ void external_interrupt_handler()
 // 时钟中断处理 (基于CLINT)
 void timer_interrupt_handler()
 {
-    // 1. 更新系统时钟（仅CPU0负责，避免多CPU重复更新）
+    // 1) 更新系统时钟（仅CPU0负责）
     if (mycpuid() == 0) {
         timer_update();
     }
 
-    // 2. 清除 SSIP bit（S-mode软件中断挂起位）
+    // 2) 清除 SSIP bit（S-mode软件中断挂起位）
     w_sip(r_sip() & ~2);
 
-    // 3. 核心添加：内核态时钟中断触发抢占式调度
-    // 仅当当前有运行中的用户进程时，才进行抢占
+    // 3) 抢占式调度（安全版：显式持有 p->lk 再切换）
     proc_t *p = myproc();
-    if (p != NULL && p->state == RUNNING) {
-        proc_yield();  // 强迫进程交出CPU
+    if (p != NULL) {
+        spinlock_acquire(&p->lk);
+        if (p->state == RUNNING) {
+            p->state = RUNNABLE;
+            proc_sched();          // 进入/返回都保持持有 p->lk
+        }
+        spinlock_release(&p->lk);
     }
 }

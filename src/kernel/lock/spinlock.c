@@ -47,48 +47,78 @@ bool spinlock_holding(spinlock_t *lk)
 }
 
 // 获取自选锁
+// 获取自旋锁（带锁名定位）
 void spinlock_acquire(spinlock_t *lk)
 {
     push_off(); // 关中断
-    
-    // 检查是否已经持有锁
+
     if (spinlock_holding(lk)) {
-        panic("spinlock_acquire: already holding\n");
+        // ===== 诊断日志开始（修正版：不访问 c->id）=====
+        int cpuid = mycpuid();
+        cpu_t *c = mycpu();
+        proc_t *p = c ? c->proc : NULL;
+        int pid = p ? p->pid : -1;
+        int pstate = p ? p->state : -1;
+
+        uint64 sstatus = r_sstatus();
+        uint64 sie = r_sie();
+        uint64 sip = r_sip();
+
+        uart_puts("spinlock_acquire: already holding: ");
+        if (lk->name) uart_puts(lk->name); else uart_puts("(noname)");
+        uart_puts("\n");
+
+        uart_puts("  cpu="); uart_puthex(cpuid); uart_puts("\n");
+        uart_puts("  myproc.pid="); uart_puthex(pid);
+        uart_puts(" state="); uart_puthex(pstate); uart_puts("\n");
+        uart_puts("  lk->cpuid="); uart_puthex(lk->cpuid);
+        uart_puts(" locked="); uart_puthex(lk->locked); uart_puts("\n");
+        uart_puts("  sstatus="); uart_puthex(sstatus);
+        uart_puts(" sie="); uart_puthex(sie);
+        uart_puts(" sip="); uart_puthex(sip); uart_puts("\n");
+        // ===== 诊断日志结束 =====
+
+        panic("spinlock_acquire: already holding");
     }
-    
-    // 原子交换操作，等待获取锁
+
     while (__sync_lock_test_and_set(&lk->locked, 1) != 0) {
-        // // 临时开启中断，避免死锁
-        // if (intr_get() == 0) {
-        //     intr_on();
-        // }
+        // 自旋
     }
-    
-    // 插入内存屏障
     __sync_synchronize();
-    
-    // 使用mycpuid()设置当前持有锁的CPU ID
     lk->cpuid = mycpuid();
 }
+
+
+
 
 // 释放自旋锁
 void spinlock_release(spinlock_t *lk)
 {
-    // 在修改任何状态之前检查是否持有锁
     int cpuid = mycpuid();
-    //no printf
-    //printf("acquire lock %s on cpu %d\n", lk->name, cpuid);
+
+    // 在修改任何状态之前检查是否持有锁
     if (lk->cpuid != cpuid || lk->locked == 0) {
-        uart_puts("spinlock_release: not holding\n");  // 无锁打印
-        while (1);  // 死循环挂起，避免递归
+        // 详细诊断：哪把锁、当前 CPU、锁属主、锁位、以及中断相关寄存器
+        printf("spinlock_release: not holding: %s\n", lk->name ? lk->name : "(noname)");
+        printf("  cpu=%d\n", cpuid);
+        proc_t *p = myproc();
+        if (p) {
+            printf("  myproc.pid=%d state=%d\n", p->pid, p->state);
+        } else {
+            printf("  myproc.pid=<none>\n");
+        }
+        printf("  lk->cpuid=%d locked=%d\n", lk->cpuid, lk->locked);
+        printf("  sstatus=%p sie=%p sip=%p\n", r_sstatus(), r_sie(), r_sip());
+        panic("spinlock_release: not holding");
     }
+
     lk->cpuid = -1;  // 重置为-1表示未持有
 
     // 插入内存屏障
     __sync_synchronize();
-    
+
     // 原子释放锁
     __sync_lock_release(&lk->locked);
-    
-    pop_off(); // 开中断
+
+    pop_off(); // 开中断（按嵌套计数）
 }

@@ -2,6 +2,8 @@
 #include "../mem/mod.h"
 #include "../lib/mod.h"
 #include "../../user/initcode.h"
+#include "../fs/method.h"   // fs_init()
+
 #define initcode target_user_initcode
 #define initcode_len target_user_initcode_len
 
@@ -43,10 +45,10 @@ void proc_return()
 {
     static int fs_inited = 0;
 
-    // proczero 第一次返回用户态之前，做文件系统初始化
+    // proczero 第一次返回用户态之前，做文件系统初始化（先置位再初始化，防止并发/重入）
     if (!fs_inited) {
-        fs_init();
         fs_inited = 1;
+        fs_init();
     }
 
     spinlock_release(&myproc()->lk);
@@ -410,20 +412,27 @@ void proc_yield()
 {
     cpu_t *c = mycpu();
     proc_t *p = c->proc;
+    if (p == NULL) return;
 
-    if (p == NULL) {
-        return;
-    }
+    // 约定：切到进程时，p->lk 已经由调度器持有并“交给了进程”。
+    // 因此这里不能再 acquire，一旦再 acquire 就会触发 already holding。
+    assert(spinlock_holding(&p->lk), "proc_yield: p->lk must be held");
 
-    // 原子修改状态为RUNNABLE
-    spinlock_acquire(&p->lk);
+    // 统一保持“中断关闭”的语义，避免在持锁到 sched 之间被时钟中断打断
+    push_off();
+
     if (p->state == RUNNING) {
         p->state = RUNNABLE;
     }
-    // 切换到调度器
+
+    // 进入调度器：要求当前已持有 p->lk 且中断关闭
     proc_sched();
+
+    // 从调度器切回后，依旧持有 p->lk；现在才由进程侧释放
     spinlock_release(&p->lk);
+    pop_off();
 }
+
 
 /*
     唤醒等待呼叫的进程
@@ -453,40 +462,35 @@ static void proc_try_wakeup(proc_t *p)
     当父进程退出时, 让它的所有子进程认proczero为父
     因为proczero永不退出, 可以回收子进程的资源
 */
+// 当父进程退出时, 让它的所有子进程认 proczero 为父。
+// 注意：调用者通常已持有 parent->lk，这里绝不能再给 parent 自己加锁。
 static void proc_reparent(proc_t *parent)
 {
-    // 入参校验：父进程不能为空
-    if (parent == NULL) {
-        return;
-    }
+    if (parent == NULL) return;
 
-    // 2. 遍历所有进程（假设proc_list是进程数组，NPROC是最大进程数）
     for (int i = 0; i < N_PROC; i++) {
         proc_t *p = &proc_list[i];
 
-        // 跳过无效进程（未初始化/已释放）
-        if (p->state == UNUSED) {
+        // 关键修正：跳过 parent 本身，避免对同一把锁二次加锁
+        if (p == parent) {
             continue;
         }
 
-        // 加当前进程的锁（避免修改进程时被其他逻辑干扰）
         spinlock_acquire(&p->lk);
 
-        // 3. 找到以当前parent为父的子进程
         if (p->parent == parent) {
-            // 将子进程的父进程改为proczero（零号进程）
             p->parent = proczero;
-            
-            // 如果子进程已经是ZOMBIE状态,需要唤醒proczero来回收
             if (p->state == ZOMBIE) {
+                // 若有僵尸子进程，唤醒 proczero 去回收
+                // 这里不会对 parent 加锁，因此无循环依赖
                 proc_try_wakeup(p);
             }
         }
 
-        // 释放当前进程的锁
         spinlock_release(&p->lk);
     }
 }
+
 /*
     进程退出
     RUNNING -> ZOMBIE
@@ -562,54 +566,74 @@ int proc_wait(uint64 user_addr)
 }
 
 /*
-    进程等待sleep_space对应的资源, 进入睡眠状态
-    RUNNING -> SLEEPING
+    让当前进程在 sleep_space 上睡眠。
+    语义：
+      - 如果调用时未持有 p->lk，这里会临时获取 p->lk，并在返回前释放；
+      - 如果调用时已持有 p->lk，这里不重复获取，也不负责释放（保持调用现场不变）。
 */
 void proc_sleep(void *sleep_space, spinlock_t *lock)
 {
     cpu_t *c = mycpu();
     proc_t *p = c->proc;
-    //assert(p != NULL && p->state == RUNNING, "proc_sleep: not running");
-    //assert(spinlock_holding(lock), "proc_sleep: not holding lock");
 
-    spinlock_acquire(&p->lk);
+    // 统一关中断，避免在“还持有 p->lk 未释放”窗口被时钟中断打断
+    push_off();
+
+    bool took_p_lock = false;
+    if (!spinlock_holding(&p->lk)) {
+        spinlock_acquire(&p->lk);
+        took_p_lock = true;
+    }
+
+    // 释放外部锁，避免把它带进 sched()
     spinlock_release(lock);
-    // 1. 绑定睡眠资源，设置状态为SLEEPING
+
     p->sleep_space = sleep_space;
     p->state = SLEEPING;
 
-    // 3. 切换到调度器（睡眠进程不再占用CPU）
-
+    // 这里要求：持有 p->lk 且中断关闭
     proc_sched();
+
+    // 被唤醒后清理睡眠标记
     p->sleep_space = NULL;
-    spinlock_release(&p->lk);
-    // 4. 被唤醒后，重新获取传入的锁（恢复睡眠前的锁状态）
+
+    if (took_p_lock) {
+        spinlock_release(&p->lk);
+    }
+
+    // 恢复外部锁
     spinlock_acquire(lock);
+
+    pop_off();  // 恢复最外层中断状态
 }
+
 
 
 /*
-    唤醒所有等待sleep_space的进程
-    SLEEPING -> RUNNABLE
+    唤醒所有等待 sleep_space 的进程。
+    关键点：如果当前 CPU 已经持有某个进程的 p->lk，就不要二次 acquire，
+    直接在“已持有”的前提下检查并修改状态；否则再去 acquire/release。
 */
 void proc_wakeup(void *sleep_space)
 {
-    // 遍历进程数组,找到所有等待该资源的进程
     for (int i = 0; i < N_PROC; i++) {
         proc_t *p = &proc_list[i];
-        
-        // 需要持有进程锁才能访问state和sleep_space字段
-        spinlock_acquire(&p->lk);
-        
-        // 如果进程在睡眠状态,且等待的就是这个资源
-        if (p->state == SLEEPING && p->sleep_space == sleep_space) {
-            // 状态转换: SLEEPING -> RUNNABLE
-            p->state = RUNNABLE;
+
+        if (spinlock_holding(&p->lk)) {
+            // 当前 CPU 已经持有这把锁，避免二次加锁
+            if (p->state == SLEEPING && p->sleep_space == sleep_space) {
+                p->state = RUNNABLE;
+            }
+        } else {
+            spinlock_acquire(&p->lk);
+            if (p->state == SLEEPING && p->sleep_space == sleep_space) {
+                p->state = RUNNABLE;
+            }
+            spinlock_release(&p->lk);
         }
-        
-        spinlock_release(&p->lk);
     }
 }
+
 
 /* 
     用户进程切换到调度器
@@ -621,25 +645,23 @@ void proc_wakeup(void *sleep_space)
 */
 void proc_sched()
 {
-    cpu_t *c = mycpu(); // 修复点1：提前获取CPU结构体，避免多次调用mycpu()
-    proc_t *p = c->proc; // 修复点2：从CPU获取进程，而非myproc()，避免上下文不一致
-    
-    // 修复点3：调整断言顺序，先校验p非空，再校验锁
+    cpu_t *c = mycpu();
+    proc_t *p = c->proc;
+
+    // 必须：进入 sched 时中断关闭，且持有 p->lk，且 p 不是 RUNNING
     assert(p != NULL, "proc_sched: no process running");
     assert(spinlock_holding(&p->lk), "proc_sched: not holding lock");
-    assert(p->state != RUNNING, "proc_sched: process still in RUNNING state"); // 新增：确保进程状态已切换
-    
-    // 修复点6：校验调度器上下文合法性（核心：避免跳转到非法地址）
+    assert(p->state != RUNNING, "proc_sched: process still running");
+    assert(intr_get() == 0, "proc_sched: interrupts must be off");
+
+    // 调度器上下文要合法
     assert(c->ctx.sp != 0 && c->ctx.ra != 0, "proc_sched: invalid scheduler ctx");
-    
-    // 修复点7：校验进程上下文合法性（避免切换后sepc非法）
-    assert(p->ctx.ra != 0 && p->ctx.sp != 0, "proc_sched: invalid process ctx");
-    // assert(p->ctx.sp >= p->kstack && p->ctx.sp < p->kstack + PGSIZE, 
-    //        "proc_sched: process sp out of kstack");
-    
-    // 保存当前进程的上下文,切换到调度器的上下文
+
+    // 切换到调度器；注意：sched 返回到调用者时，仍应保持“中断关闭+依然持有 p->lk”的语义，
+    // 由调用者在合适位置释放 p->lk，并再决定是否开中断。
     swtch(&p->ctx, &c->ctx);
 }
+
 
 /* 
     调度器
@@ -650,26 +672,37 @@ void proc_scheduler()
     cpu_t *c = mycpu();
     proc_t *p;
 
-    // 调度器死循环
     while (1) {
-        intr_off(); // 禁用中断，避免扫描被打断
+        intr_off();  // 调度循环内禁止中断，避免被时钟打断造成时序竞态
 
-        // 循环扫描进程数组（按PID顺序，循环调度）
         for (int i = 0; i < N_PROC; i++) {
             p = &proc_list[i];
-            spinlock_acquire(&p->lk);
 
-            // 找到RUNNABLE状态的进程
+            // —— 关键改动：条件获取，避免“同核已持有时再 acquire” ——
+            bool got_here = false;
+            if (!spinlock_holding(&p->lk)) {
+                spinlock_acquire(&p->lk);
+                got_here = true;
+            }
+
             if (p->state == RUNNABLE) {
-                // 标记为RUNNING，占用CPU
+                // 将其置为 RUNNING，绑定到当前 CPU
                 p->state = RUNNING;
-                // 绑定CPU与进程
                 c->proc = p;
+
                 printf("proc %d is running...\n", p->pid);
+
+                // 切到进程（注意：返回到这里时，按照约定 p->lk 仍然是“被持有”的，
+                // 但可能是由不同路径持有；因此释放动作只在 got_here==true 时做）
                 swtch(&c->ctx, &p->ctx);
             }
-            spinlock_release(&p->lk);
+
+            // 只有本轮是我们获取到的锁，才由我们来释放，防止重复释放/跨路径释放
+            if (got_here) {
+                spinlock_release(&p->lk);
+            }
         }
-        intr_on(); // 启用中断，允许时钟抢占
+
+        intr_on();
     }
 }

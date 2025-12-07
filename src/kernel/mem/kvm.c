@@ -17,57 +17,58 @@ pte_t *vm_getpte(pgtbl_t pgtbl, uint64 va, bool alloc)
     if (pgtbl == NULL)
         pgtbl = kernel_pgtbl;
 
-    pte_t *pte;
-    uint64 vpn[3];
+    uint64 vpn2 = (va >> 30) & 0x1FF;
+    uint64 vpn1 = (va >> 21) & 0x1FF;
+    uint64 vpn0 = (va >> 12) & 0x1FF;
 
-    vpn[2] = (va >> 30) & 0x1FF;
-    vpn[1] = (va >> 21) & 0x1FF;
-    vpn[0] = (va >> 12) & 0x1FF;
+    pgtbl_t pt = pgtbl;
+    // 下降两层：level=2 -> level=1
+    for (int level = 2; level > 0; level--) {
+        uint64 idx = (level == 2) ? vpn2 : vpn1;
+        pte_t *pte = &pt[idx];
 
-    pgtbl_t pgtbl_2 = pgtbl;
-    for (int level = 2; level > 0; level--)
-    {
-        pte = &pgtbl_2[vpn[level]];
         if (!(*pte & PTE_V)) {
-            if (!alloc)
-                return NULL;
+            if (!alloc) return NULL;
 
             uint64 pa = (uint64)pmem_alloc(true);
-            if (!pa)
-                return NULL;
+            if (!pa) return NULL;
 
-            memset((void*)pa, 0, PGSIZE);
-            *pte = PA_TO_PTE(pa) | PTE_V;
+            memset((void *)pa, 0, PGSIZE);
+            *pte = PA_TO_PTE(pa) | PTE_V;   // 中间页表项：只置 V
         }
-        if (!PTE_CHECK(*pte))
+
+        if (!PTE_CHECK(*pte))   // 中间项必须是页表（R/W/X 均为 0）
             return NULL;
-        pgtbl_2 = (pgtbl_t)PTE_TO_PA(*pte);
+
+        pt = (pgtbl_t)PTE_TO_PA(*pte);
     }
-    return &pgtbl_2[vpn[0]];
+
+    // 返回第 0 级页表项地址
+    return &pt[vpn0];
 }
+
 
 // va从va开始, 以页为单位映射len字节的连续地址
 void vm_mappages(pgtbl_t pgtbl, uint64 va, uint64 pa, uint64 len, int perm)
 {
     assert((va % PGSIZE) == 0 && (pa % PGSIZE) == 0, "vm_mappages: not aligned");
 
-    for (uint64 off = 0; off < len; off += PGSIZE)
-    {
+    for (uint64 off = 0; off < len; off += PGSIZE) {
         pte_t *pte = vm_getpte(pgtbl, va + off, true);
         assert(pte != NULL, "vm_mappages: vm_getpte NULL");
         assert((*pte & PTE_V) == 0, "vm_mappages: remap");
 
-        *pte = PA_TO_PTE(pa + off) | PTE_V | perm;
+        *pte = PA_TO_PTE(pa + off) | PTE_V | perm;  // 叶子项：V | perm
     }
 }
+
 
 // va从va开始, 以页为单位解除len字节的连续地址映射
 void vm_unmappages(pgtbl_t pgtbl, uint64 va, uint64 len, bool freeit)
 {
     assert((va % PGSIZE) == 0, "vm_unmappages: not aligned");
 
-    for (uint64 off = 0; off < len; off += PGSIZE)
-    {
+    for (uint64 off = 0; off < len; off += PGSIZE) {
         pte_t *pte = vm_getpte(pgtbl, va + off, false);
         assert(pte && (*pte & PTE_V), "vm_unmappages: pte invalid");
 
@@ -108,16 +109,26 @@ void kvm_init()
         vm_mappages(kernel_pgtbl, KSTACK(i), (uint64)kstack_pa, 2 * PGSIZE, PTE_R | PTE_W);
     }
 
-    // 6. **新增**：映射 virtio 磁盘 MMIO 寄存器（RW）
-    vm_mappages(kernel_pgtbl, (uint64)VIRTIO_BASE, (uint64)VIRTIO_BASE, PGSIZE, PTE_R | PTE_W);
+
+    // 映射常用 MMIO 寄存器
+    vm_mappages(kernel_pgtbl, 0x10000000UL, 0x10000000UL, 0x00001000UL, PTE_R | PTE_W); // UART0: 4KB
+    vm_mappages(kernel_pgtbl, 0x10001000UL, 0x10001000UL, 0x00001000UL, PTE_R | PTE_W); // VIRTIO: 4KB
+    vm_mappages(kernel_pgtbl, 0x0C000000UL, 0x0C000000UL, 0x00400000UL, PTE_R | PTE_W); // PLIC: 4MB (覆盖 priority/enable/claim 等)
+    vm_mappages(kernel_pgtbl, 0x02000000UL, 0x02000000UL, 0x00010000UL, PTE_R | PTE_W); // CLINT: 64KB (mtime/mtimecmp/软件中断)
+
+
 }
+
 
 // 每个CPU都需要调用, 从不使用页表切换到使用内核页表
 void kvm_inithart()
 {
+    // 切换到内核页表，但此时不要开启中断
     w_satp(MAKE_SATP(kernel_pgtbl));
     sfence_vma();
-    intr_on();
+
+    // 不要在这里 intr_on()！
+    // 中断的开启放在 trap_kernel_inithart() 完成 PLIC/SIE 配置之后再开
 }
 
 // 打印页表（用于调试）
