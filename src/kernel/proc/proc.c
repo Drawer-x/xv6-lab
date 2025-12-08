@@ -270,78 +270,68 @@ pgtbl_t proc_pgtbl_init(uint64 trapframe_pa)
 */
 void proc_make_first()
 {
-    // 用户栈地址定义（替换原有USTACK_TOP/USTACK_BOT）
+    // 用户栈底地址（紧贴 TRAPFRAME 之下）
     #define USTACK (TRAPFRAME - PGSIZE)
 
-    // 使用 proc_alloc 申请第一个进程
+    // 申请 proczero
     proczero = proc_alloc();
     assert(proczero != NULL, "proc_make_first: proczero alloc failed");
     proc_t *p = proczero;
 
     // 设置进程名称
     const char *proc_name = "proczero";
-    uint32 name_max_len = sizeof(p->name) - 1; // 预留终止符空间
+    uint32 name_max_len = sizeof(p->name) - 1;
     uint32 name_len = 0;
-
-    // 手动遍历计算字符串长度（兼容无 strlen 的极简环境）
-    while (proc_name[name_len] != '\0' && name_len < name_max_len) {
-        name_len++;
-    }
-
-    // 用 memmove 安全拷贝进程名（memmove 兼容内存重叠，更安全）
+    while (proc_name[name_len] != '\0' && name_len < name_max_len) name_len++;
     if (name_len > 0) {
         memmove(p->name, (void*)proc_name, name_len);
     }
-    // 强制添加字符串终止符，避免垃圾数据
     p->name[name_len] = '\0';
-    // 剩余空间清零（避免残留数据泄露）
     if (name_len < name_max_len) {
         memset(p->name + name_len + 1, 0, name_max_len - name_len);
     }
 
-    // 分配用户代码页放在 USER_BASE
+    // 分配并映射用户 code 页到 USER_BASE
     void *ucode_pa = pmem_alloc(false);
     assert(ucode_pa != NULL && (uint64)ucode_pa != 0, "proc_make_first: initcode page alloc failed");
-    memset(ucode_pa, 0, PGSIZE); // 先清零物理页
+    memset(ucode_pa, 0, PGSIZE);
 
-    // 用 memmove 拷贝用户初始化代码（兼容内存重叠，内核态直接操作物理页）
     uint32 copy_len = (target_user_initcode_len > PGSIZE) ? PGSIZE : target_user_initcode_len;
     if (copy_len > 0 && target_user_initcode != NULL) {
         memmove(ucode_pa, (void*)target_user_initcode, copy_len);
     }
 
-    // 映射用户代码页（vm_mappages无返回值，前置校验参数合法性）
-    assert(p->pgtbl != NULL && USER_BASE != 0 && (uint64)ucode_pa != 0, 
+    assert(p->pgtbl != NULL && USER_BASE != 0 && (uint64)ucode_pa != 0,
            "proc_make_first: ucode map param invalid");
     vm_mappages(p->pgtbl, USER_BASE, (uint64)ucode_pa, PGSIZE, PTE_R | PTE_X | PTE_U);
 
-    // 分配用户栈（取消USTACK_TOP/USTACK_BOT，改用USTACK宏）
+    // 分配并映射用户栈页到 USTACK
     void *ustack_pa = pmem_alloc(false);
     assert(ustack_pa != NULL && (uint64)ustack_pa != 0, "proc_make_first: ustack page alloc failed");
-    memset(ustack_pa, 0, PGSIZE); // 安全清零用户栈
+    memset(ustack_pa, 0, PGSIZE);
 
-    // 映射用户栈页（使用USTACK宏替代原USTACK_BOT）
     assert(p->pgtbl != NULL && USTACK != 0 && (uint64)ustack_pa != 0,
            "proc_make_first: ustack map param invalid");
     vm_mappages(p->pgtbl, USTACK, (uint64)ustack_pa, PGSIZE, PTE_R | PTE_W | PTE_U);
     p->ustack_npage = 1;
-    p->heap_top = USER_BASE + PGSIZE; // 对齐参考版的堆顶初始化
+    p->heap_top = USER_BASE + PGSIZE;
 
-    // 填写 trapframe 关键字段
-    p->tf->user_to_kern_satp = r_satp();
-    // 对齐参考版的内核栈地址计算方式
+    // ===== 关键：按“标准 trapframe 布局”填写 5 个内核字段与用户 EPC =====
+    extern void trap_user_handler();
     int proc_id = p - proc_list;
-    p->tf->user_to_kern_sp = KSTACK(proc_id) + PGSIZE;  // 内核栈顶
-    extern void trap_user_handler(); // 补充参考版的extern声明
-    p->tf->user_to_kern_trapvector = (uint64)trap_user_handler;
-    p->tf->user_to_kern_epc = USER_BASE; // 用户态入口（initcode起始）
-    p->tf->user_to_kern_hartid = r_tp();  // 当前核ID
-    p->tf->sp = USTACK + PGSIZE; // 改用USTACK宏计算用户栈顶
 
-    // 状态设置为 RUNNABLE（等待调度器调度）
-    p->state = RUNNABLE;//
+    p->tf->kernel_satp   = r_satp();                         // 返回内核时切回的 satp
+    p->tf->kernel_sp     = KSTACK(proc_id) + PGSIZE;         // 内核栈顶
+    p->tf->kernel_trap   = (uint64)trap_user_handler;        // S 态 trap 入口（C 处理函数）
+    p->tf->epc           = USER_BASE;                        // 用户入口（initcode）
+    p->tf->kernel_hartid = r_tp();                           // 当前 hartid
+    // 用户态 sp（trampoline.S 会从 trapframe 恢复它）
+    p->tf->sp            = USTACK + PGSIZE;
 
-    // 释放进程锁(proc_alloc 返回时持有锁)
+    // 设为可运行，等待调度
+    p->state = RUNNABLE;
+
+    // 释放进程锁（proc_alloc 返回时持有）
     spinlock_release(&p->lk);
 }
 
@@ -356,54 +346,64 @@ int proc_fork()
     proc_t *parent = c->proc;
     assert(parent != NULL && parent->state == RUNNING, "proc_fork: parent not running");
 
-    // 1. 申请空闲进程结构体（返回时带锁）
+    // 1) 申请子进程结构体（返回时已持有 child->lk）
     proc_t *child = proc_alloc();
     if (child == NULL) {
-        return -1; // 无空闲进程
+        return -1;
     }
 
-    // 2. 复制父进程状态（持有child->lk锁，保证原子性）
-    // ===== 替代uvm_copyin：手动逐字符拷贝进程名称（极简版）=====
+    // 2) 复制进程名（简化安全拷贝）
     uint32 name_max_len = sizeof(child->name) - 1;
     uint32 i = 0;
-    // 逐字符拷贝，直到父进程名结束或达到最大长度
     while (i < name_max_len && parent->name[i] != '\0') {
         child->name[i] = parent->name[i];
         i++;
     }
-    child->name[i] = '\0'; // 强制添加字符串终止符
+    child->name[i] = '\0';
 
-    // ===== 复制用户态页表（复用原有页表初始化逻辑）=====
-    child->pgtbl = proc_pgtbl_init((uint64)child->tf);
-    uvm_copy_pgtbl(parent->pgtbl, child->pgtbl, parent->heap_top, parent->ustack_npage, parent->mmap);
+    // 3) 复制用户地址空间
+    //    proc_alloc() 已经为 child 分配了 trapframe 和 pgtbl，
+    //    这里只需要把父页表内容 copy 到 child->pgtbl。
+    uvm_copy_pgtbl(parent->pgtbl, child->pgtbl,
+                   parent->heap_top, parent->ustack_npage, parent->mmap);
 
-    // ===== 手动拷贝堆、栈、mmap信息（逐字段赋值）=====
-    child->heap_top = parent->heap_top;
-    child->ustack_npage = parent->ustack_npage;
-    child->mmap = parent->mmap; // 简化：浅拷贝，后续可扩展为链表逐节点拷贝
+    // 4) 复制与用户地址空间相关的元数据
+    child->heap_top    = parent->heap_top;
+    child->ustack_npage= parent->ustack_npage;
+    child->mmap        = parent->mmap;   // 目前保持与你现有逻辑一致（浅拷贝）
 
-    // ===== 替代uvm_copyin：手动逐字段拷贝陷阱帧（核心字段）=====
+    // 5) 复制 trapframe，并修正与“子进程内核栈/当前核”相关的字段
     if (parent->tf != NULL && child->tf != NULL) {
-    *child->tf = *parent->tf;
+        *child->tf = *parent->tf;
     }
 
-    // ===== 替代memcpy：手动处理内核栈（仅初始化栈顶，简化实现）=====
-    child->kstack = KSTACK(child->pid); // 分配独立内核栈
-    // 极简版：仅拷贝内核上下文核心字段（栈顶偏移），无需拷贝整个栈内容
-    child->ctx = parent->ctx;
-    child->ctx.sp = child->kstack + (parent->ctx.sp - parent->kstack); // 保持栈偏移一致
+    // 计算子进程的内核栈地址（注意用数组下标而不是 pid）
+    child->kstack = KSTACK(child - proc_list);
 
-    // 3. 建立父子关系
+    // 标准 trapframe 字段修正
+    child->tf->kernel_sp     = child->kstack + PGSIZE;  // 子进程返回内核时使用的栈顶
+    child->tf->kernel_hartid = r_tp();                  // 当前 hart
+    child->tf->kernel_satp   = r_satp();                // 返回内核时应切回的 satp（内核页表）
+    // kernel_trap/epc/sp 已被复制自父进程，通常无需改动：
+    // - kernel_trap 指向 trap_user_handler（在 proc_make_first 中已设置）
+    // - epc 是用户空间返回地址
+    // - sp 是用户态栈顶，由 uvm_copy_pgtbl 后保持一致
+
+    // 6) 初始化子进程的内核上下文（不要用整体赋值覆盖）
+    memset(&child->ctx, 0, sizeof(context_t));
+    child->ctx.sp = child->kstack + PGSIZE;           // 切入子进程时使用的内核栈
+    child->ctx.ra = (uint64)proc_return;              // 从调度器切回时落到这里进入用户态
+
+    // 7) 建立父子关系
     child->parent = parent;
-    // 核心修正：将陷阱帧中内核栈指针从父进程地址替换为子进程独立内核栈的栈顶
-    // PGSIZE是页大小（如4096），child->kstack是内核栈基址，+PGSIZE指向栈顶（RISC-V栈向下生长）
-    child->tf->user_to_kern_sp = child->kstack + PGSIZE;
-    // 4. 解锁子进程，设为可运行（proc_alloc默认初始化state为RUNNABLE）
+
+    // 8) 解锁并让子进程进入可运行态（proc_alloc 已设 RUNNABLE）
     spinlock_release(&child->lk);
 
-    // 父进程返回子进程PID
+    // 9) 父进程返回子进程 PID
     return child->pid;
 }
+
 /*
     进程主动放弃CPU控制权
     RUNNING->RUNNABLE

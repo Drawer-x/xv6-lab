@@ -1,14 +1,19 @@
     .section .text
     .globl _start
 
-    .equ SYS_helloworld, 1
+    .equ SYS_print_str, 4
 
 _start:
-    li a7, SYS_helloworld
-    ecall
+    # 把字符串地址放进 a0
+    la a0, msg
 
-    li a7, SYS_helloworld
+    # syscall: print_str(msg)
+    li a7, SYS_print_str
     ecall
 
 1:
     j 1b
+
+    .section .rodata
+msg:
+    .asciz "hello, world!\n"

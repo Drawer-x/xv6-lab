@@ -18,81 +18,60 @@ void external_interrupt_handler(void);
 
 // 在user_vector()里面调用
 // 用户态trap处理的核心逻辑
+// 用户态 trap 的 C 处理逻辑（在 trampoline.S 的 user_vector 尾部调用）
 void trap_user_handler()
 {
-    // 进入内核，切换trap入口到kernel_vector
+    // 进入内核后，把 stvec 切到内核 trap 向量
     w_stvec((uint64)kernel_vector);
 
-    proc_t *p = myproc();
+    proc_t *p  = myproc();
     trapframe_t *tf = p->tf;
 
-    // 记录本次trap发生时的用户PC
-    tf->user_to_kern_epc = r_sepc();
+    // 记录用户 EPC
+    tf->epc = r_sepc();
 
     uint64 scause = r_scause();
     int trap_id = scause & 0xf;
 
-    if (scause & 0x8000000000000000ul) {
-        // 来自U态的中断：委托给内核的中断处理逻辑
+    if (scause & 0x8000000000000000UL) {
+        // 中断（从 U 态进入）
         switch (trap_id) {
-        case 1: // S-mode software interrupt（由M态时钟中断转发）
+        case 1: // S-mode software interrupt（M 态时钟中断转发）
             timer_interrupt_handler();
-
-            // ——安全抢占（替代裸调 proc_yield）——
-            // 显式获取当前进程锁，把 RUNNING 改回 RUNNABLE，
-            // 用 proc_sched() 切回调度器；返回后再释放锁。
-            {
-                proc_t *cur = myproc();
-                if (cur != NULL) {
-                    spinlock_acquire(&cur->lk);
-                    if (cur->state == RUNNING) {
-                        cur->state = RUNNABLE;
-                        proc_sched();          // 进入/返回都保持持有 cur->lk
-                    }
-                    spinlock_release(&cur->lk);
-                }
-            }
+            // 抢占：让出 CPU
+            proc_yield();
             break;
-
         case 9: // S-mode external interrupt（PLIC）
             external_interrupt_handler();
             break;
-
         default:
             printf("unexpected user interrupt id=%d\n", trap_id);
-            printf("sepc=%p stval=%p\n", tf->user_to_kern_epc, r_stval());
-            // 未识别的中断：先不panic，直接返回用户态以避免系统退出
+            printf("sepc=%p stval=%p\n", tf->epc, r_stval());
             break;
         }
     } else {
-        // 异常处理
+        // 异常
         switch (trap_id) {
         case 8: // ecall from U-mode
-            // 保存用户程序的返回地址（ecall指令的下一条指令）
-            tf->user_to_kern_epc += 4; // 跳过 ecall
-            // 调用系统调用处理函数
+            // 跳过 ecall 指令
+            tf->epc += 4;
             syscall();
             break;
-
-        case 13: // Load Page Fault
-        case 15: // Store/AMO Page Fault
+        case 13: // Load page fault
+        case 15: // Store/AMO page fault
         {
             uint64 stval = r_stval();
-            printf("page fault occured! trap id = %d\n", trap_id);
-            uint64 old_n = p->ustack_npage;
             uint64 new_n = uvm_ustack_grow(p->pgtbl, p->ustack_npage, stval);
             if (new_n == (uint64)-1) {
                 printf("ustack grow failed: npage=%p, stval=%p\n", p->ustack_npage, stval);
                 panic("trap_user_handler");
             }
             p->ustack_npage = new_n;
-            printf("ustack_npage:  %d -> %d\n", (int)old_n, (int)new_n);
             break;
         }
-
         default:
             printf("unexpected user exception id=%d sepc=%p stval=%p\n",
-                   trap_id, tf->user_to_kern_epc, r_stval());
+                   trap_id, tf->epc, r_stval());
             panic("trap_user_handler");
         }
     }
@@ -100,31 +79,31 @@ void trap_user_handler()
     trap_user_return();
 }
 
-// 调用user_return()
-// 内核态返回用户态
 void trap_user_return()
 {
-    proc_t *p = myproc();
+    proc_t *p  = myproc();
     trapframe_t *tf = p->tf;
-    tf->user_to_kern_hartid = mycpuid();
 
-    // stvec -> 用户向量（高地址）
+    // 更新 hartid（供 trampoline 使用）
+    tf->kernel_hartid = mycpuid();
+
+    // stvec 指向用户态入口（trampoline 中的 user_vector）
     uint64 uservec_va = TRAMPOLINE + ((uint64)user_vector - (uint64)trampoline);
     w_stvec(uservec_va);
 
-    // sscratch 写入 TRAPFRAME 虚拟地址
+    // sscratch 写 TRAPFRAME 虚拟地址（trampoline 约定）
     w_sscratch((uint64)TRAPFRAME);
 
-    // sret 到 U：清 SPP，置 SPIE
+    // sret 到 U：清 SPP（返回 U 态），置 SPIE（打开中断使能）
     uint64 s = r_sstatus();
-    s &= ~SSTATUS_SPP;
-    s |= SSTATUS_SPIE;
+    s &= ~SSTATUS_SPP;   // 下一次 sret 返回 U
+    s |=  SSTATUS_SPIE;  // 使能中断
     w_sstatus(s);
 
-    // 设置 sepc
-    w_sepc(tf->user_to_kern_epc);
+    // 恢复用户 EPC
+    w_sepc(tf->epc);
 
-    // 跳转 trampoline 的 user_return(trapframe_va, user_satp)
+    // 跳到 trampoline 的 user_return(trapframe_va, user_satp)
     uint64 userret_va = TRAMPOLINE + ((uint64)user_return - (uint64)trampoline);
     void (*ureturn)(trapframe_t *, uint64) = (void (*)(trapframe_t *, uint64))userret_va;
     ureturn((trapframe_t *)TRAPFRAME, MAKE_SATP(p->pgtbl));
