@@ -38,8 +38,8 @@ void trap_user_handler()
         switch (trap_id) {
         case 1: // S-mode software interrupt（M 态时钟中断转发）
             timer_interrupt_handler();
-            // 抢占：让出 CPU
-            proc_yield();
+            // 注意：timer_interrupt_handler 内部已经调用 proc_sched() 让出 CPU
+            // 不要再调用 proc_yield()，否则会导致锁状态不一致
             break;
         case 9: // S-mode external interrupt（PLIC）
             external_interrupt_handler();
