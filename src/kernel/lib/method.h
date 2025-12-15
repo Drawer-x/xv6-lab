@@ -13,7 +13,6 @@ void uart_init(void);
 void uart_putc_sync(int c);
 int uart_getc_sync(void);
 void uart_intr(void);
-// UART 打印函数声明
 void uart_puts(const char *s);
 void uart_putint(int num);
 void uart_puthex(uint64 addr);
@@ -27,4 +26,6 @@ proc_t *myproc(void);
 
 void memset(void *begin, uint8 data, uint32 n);
 void memmove(void *dst, const void *src, uint32 n);
+void *memcpy(void *dst, const void *src, uint32 n);
 int strncmp(const char *p, const char *q, uint32 n);
+int strlen(const char *str);

@@ -9,7 +9,7 @@ static void virtio_service_used_locked(void)
 {
     // 设备把已完成的条目写入 used->elems，并把 used->idx 递增。
     // 我们用 disk.used_idx 跟着消费；两者不相等就说明还有未处理的完成项。
-    while (disk.used_idx != disk.used->idx) {
+    while (disk.used_idx != disk.used->id) {
         // 对 ring 大小取模索引
         uint16 u = (uint16)(disk.used_idx % VIRTIO_NUM);
 
@@ -94,7 +94,7 @@ void virtio_disk_init()
 
     // host/device 完成队列的读写下标
     disk.used_idx  = 0;
-    disk.used->idx = 0;   // 注意：你的 used_area_t 必须有 idx 字段（若仍叫 id，请统一为 idx）
+    disk.used->id = 0;   // 注意：你的 used_area_t 必须有 idx 字段（若仍叫 id，请统一为 idx）
 
     // 9) 队列就绪（非常关键）
     *R(VIRTIO_MMIO_QUEUE_READY) = 1;
