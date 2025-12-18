@@ -69,7 +69,6 @@ void fs_init()
 	inode_put(ip_1);
 
 	/* 大批量读写测试 */
-
 	char *big_src, big_dst[9];
 	big_dst[8] = 0;
 
@@ -92,9 +91,14 @@ void fs_init()
 	cut_len = PGSIZE * 4 + 1110;
 	for (uint32 offset = 0; offset < cut_len * 10000; offset += cut_len)
 	{
+		printf("0\n");
 		len = inode_write_data(ip_2, offset, cut_len, big_src, false);
+		printf("%d\n",len);
 		assert(len == cut_len, "write fail 2!");
+		printf("2\n");
+		
 	}
+	printf("3\n");
 	inode_print(ip_2, "big_data");
 
 	len = inode_read_data(ip_1, cut_len * 10000 - 8, 8, big_dst, false);

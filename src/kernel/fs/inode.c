@@ -148,119 +148,145 @@ static void free_data_blocks(uint32 *inode_index)
 	成功返回block_num, 失败返回-1
 */
 #define IDX_PER_BLOCK (BLOCK_SIZE / sizeof(uint32))
-uint32 locate_or_add_block(uint32 *index, uint32 block_no)
+uint32 locate_or_add_block(uint32 *index, uint32 lbn)
 {
     uint32 block;
 
-    /* ---------- 直接映射 ---------- */
-    if (block_no < INODE_BLOCK_INDEX_1) {
-        if (index[block_no] == 0) {
+    /* =========================================================
+     * 0️⃣ 直接映射
+     * ========================================================= */
+    if (lbn < INODE_INDEX_1) {
+        if (index[lbn] == 0) {
             block = bitmap_alloc_block();
             if (block == 0)
-                return (uint32)-1;
-            index[block_no] = block;
+                panic("locate_or_add_block: no data block");
+
+            index[lbn] = block;
         }
-        return index[block_no];
+        return index[lbn];
     }
 
-    block_no -= INODE_BLOCK_INDEX_1;
+    lbn -= INODE_INDEX_1;
 
-    /* ---------- 一级间接 ---------- */
-    if (block_no < INODE_BLOCK_INDEX_2 - INODE_BLOCK_INDEX_1) {
-        uint32 first = block_no / IDX_PER_BLOCK;
-        uint32 second = block_no % IDX_PER_BLOCK;
+    /* =========================================================
+     * 1️⃣ 一级间接映射
+     * ========================================================= */
+    uint32 l1_cap = (INODE_INDEX_2 - INODE_INDEX_1) * IDX_PER_BLOCK;
 
-        if (index[INODE_INDEX_1 + first] == 0) {
+    if (lbn < l1_cap) {
+        uint32 i1 = lbn / IDX_PER_BLOCK;
+        uint32 i2 = lbn % IDX_PER_BLOCK;
+
+        /* 分配一级索引块 */
+        if (index[INODE_INDEX_1 + i1] == 0) {
             block = bitmap_alloc_block();
             if (block == 0)
-                return (uint32)-1;
-            index[INODE_INDEX_1 + first] = block;
+                panic("locate_or_add_block: no index block");
 
-            buffer_t *buf = buffer_get(block);
-            memset(buf->data, 0, BLOCK_SIZE);
-            buffer_write(buf);
-            buffer_put(buf);
+            index[INODE_INDEX_1 + i1] = block;
+
+            buffer_t *b = buffer_get(block);
+            memset(b->data, 0, BLOCK_SIZE);
+            buffer_write(b);
+            buffer_put(b);
         }
 
-        buffer_t *buf = buffer_get(index[INODE_INDEX_1 + first]);
-        uint32 *idx = (uint32 *)buf->data;
+        buffer_t *b = buffer_get(index[INODE_INDEX_1 + i1]);
+        uint32 *idx = (uint32 *)b->data;
 
-        if (idx[second] == 0) {
+        if (idx[i2] == 0) {
             block = bitmap_alloc_block();
             if (block == 0) {
-                buffer_put(buf);
-                return (uint32)-1;
+                buffer_put(b);
+                panic("locate_or_add_block: no data block");
             }
-            idx[second] = block;
-            buffer_write(buf);
+
+            idx[i2] = block;
+            buffer_write(b);
         }
 
-        block = idx[second];
-        buffer_put(buf);
+        block = idx[i2];
+        buffer_put(b);
         return block;
     }
 
-    block_no -= (INODE_BLOCK_INDEX_2 - INODE_BLOCK_INDEX_1);
+    lbn -= l1_cap;
 
-    /* ---------- 二级间接 ---------- */
-    uint32 first = block_no / (IDX_PER_BLOCK * IDX_PER_BLOCK);
-    uint32 rest  = block_no % (IDX_PER_BLOCK * IDX_PER_BLOCK);
-    uint32 second = rest / IDX_PER_BLOCK;
-    uint32 third  = rest % IDX_PER_BLOCK;
+    /* =========================================================
+     * 2️⃣ 二级间接映射
+     * ========================================================= */
+    uint32 l2_cap =
+        (INODE_INDEX_3 - INODE_INDEX_2) *
+        IDX_PER_BLOCK * IDX_PER_BLOCK;
 
-    /* 第一级索引块 */
-    if (index[INODE_INDEX_2 + first] == 0) {
+    if (lbn >= l2_cap)
+        panic("locate_or_add_block: file too large");
+
+    uint32 i1 = lbn / (IDX_PER_BLOCK * IDX_PER_BLOCK);
+    uint32 rest = lbn % (IDX_PER_BLOCK * IDX_PER_BLOCK);
+    uint32 i2 = rest / IDX_PER_BLOCK;
+    uint32 i3 = rest % IDX_PER_BLOCK;
+
+    if (i1 >= (INODE_INDEX_3 - INODE_INDEX_2))
+        panic("locate_or_add_block: index overflow");
+
+    /* -------- 一级索引块 -------- */
+    if (index[INODE_INDEX_2 + i1] == 0) {
         block = bitmap_alloc_block();
         if (block == 0)
-            return (uint32)-1;
-        index[INODE_INDEX_2 + first] = block;
+            panic("locate_or_add_block: no index_index block");
 
-        buffer_t *buf = buffer_get(block);
-        memset(buf->data, 0, BLOCK_SIZE);
-        buffer_write(buf);
-        buffer_put(buf);
+        index[INODE_INDEX_2 + i1] = block;
+
+        buffer_t *b = buffer_get(block);
+        memset(b->data, 0, BLOCK_SIZE);
+        buffer_write(b);
+        buffer_put(b);
     }
 
-    /* 第二级索引块 */
-    buffer_t *buf1 = buffer_get(index[INODE_INDEX_2 + first]);
-    uint32 *idx_lv1 = (uint32 *)buf1->data;
+    buffer_t *b1 = buffer_get(index[INODE_INDEX_2 + i1]);
+    uint32 *idx1 = (uint32 *)b1->data;
 
-    if (idx_lv1[second] == 0) {
+    /* -------- 二级索引块 -------- */
+    if (idx1[i2] == 0) {
         block = bitmap_alloc_block();
         if (block == 0) {
-            buffer_put(buf1);
-            return (uint32)-1;
+            buffer_put(b1);
+            panic("locate_or_add_block: no index block");
         }
-        idx_lv1[second] = block;
 
-        buffer_t *tmp = buffer_get(block);
-        memset(tmp->data, 0, BLOCK_SIZE);
-        buffer_write(tmp);
-        buffer_put(tmp);
+        idx1[i2] = block;
 
-        buffer_write(buf1);
+        buffer_t *btmp = buffer_get(block);
+        memset(btmp->data, 0, BLOCK_SIZE);
+        buffer_write(btmp);
+        buffer_put(btmp);
+
+        buffer_write(b1);
     }
 
-    uint32 lv2_block = idx_lv1[second];   // ✅ 先保存
-    buffer_put(buf1);                     // ✅ 再释放
+    uint32 data_index_block = idx1[i2];
+    buffer_put(b1);
 
-    buffer_t *buf2 = buffer_get(lv2_block);
-    uint32 *idx_lv2 = (uint32 *)buf2->data;
+    buffer_t *b2 = buffer_get(data_index_block);
+    uint32 *idx2 = (uint32 *)b2->data;
 
-    if (idx_lv2[third] == 0) {
+    if (idx2[i3] == 0) {
         block = bitmap_alloc_block();
         if (block == 0) {
-            buffer_put(buf2);
-            return (uint32)-1;
+            buffer_put(b2);
+            panic("locate_or_add_block: no data block");
         }
-        idx_lv2[third] = block;
-        buffer_write(buf2);
+
+        idx2[i3] = block;
+        buffer_write(b2);
     }
 
-    block = idx_lv2[third];
-    buffer_put(buf2);
+    block = idx2[i3];
+    buffer_put(b2);
     return block;
 }
+
 
 
 /*---------------------关于inode的管理: get dup lock unlock put----------------------*/
@@ -271,6 +297,7 @@ uint32 locate_or_add_block(uint32 *index, uint32 block_no)
 */
 void inode_rw(inode_t *ip, bool write)
 {
+    printf("inode_rw begin\n");
 	buffer_t *buf = buffer_get(inode_block(ip->inode_num));
 	inode_disk_t *dip =
 	(inode_disk_t *)buf->data + inode_offset(ip->inode_num);
@@ -481,25 +508,45 @@ uint32 inode_read_data(inode_t *ip, uint32 offset, uint32 len, void *dst, bool i
 	需要拷贝src(用户态地址/内核态地址)到data[offset,offset+len)
 	返回写入的数据量(字节)
 */
-uint32 inode_write_data(inode_t *ip, uint32 offset, uint32 len, void *src, bool user)
+uint32 inode_write_data(inode_t *ip,
+                        uint32 offset,
+                        uint32 len,
+                        void *src,
+                        bool user)
 {
     uint32 tot = 0;
     uint32 block_no, block_offset;
     uint32 n;
 
+    uint32 max_blocks =
+        INODE_INDEX_1 +
+        (INODE_INDEX_2 - INODE_INDEX_1) * IDX_PER_BLOCK +
+        (INODE_INDEX_3 - INODE_INDEX_2) * IDX_PER_BLOCK * IDX_PER_BLOCK;
+
+    uint32 max_size = max_blocks * BLOCK_SIZE;
+
+    if (offset + len > max_size)
+        printf("inode_write_data: file too large");
+
     while (tot < len) {
         block_no = (offset + tot) / BLOCK_SIZE;
         block_offset = (offset + tot) % BLOCK_SIZE;
 
+        if (block_no >= max_blocks)
+            printf("inode_write_data: block_no overflow");
+
         uint32 bnum = locate_or_add_block(ip->disk_info.index, block_no);
         if (bnum == (uint32)-1)
-            panic("inode_write_data: no block");
+            printf("inode_write_data: no block");
 
         buffer_t *buf = buffer_get(bnum);
 
         n = BLOCK_SIZE - block_offset;
         if (n > len - tot)
             n = len - tot;
+
+        if (n == 0)
+            printf("inode_write_data: n == 0");
 
         memcpy(buf->data + block_offset,
                (char *)src + tot,
@@ -514,7 +561,7 @@ uint32 inode_write_data(inode_t *ip, uint32 offset, uint32 len, void *src, bool 
     if (offset + len > ip->disk_info.size)
         ip->disk_info.size = offset + len;
 
-    inode_rw(ip, true);
+    //inode_rw(ip, true);
     return len;
 }
 

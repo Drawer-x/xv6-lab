@@ -15,24 +15,24 @@ static inline int is_page_aligned(uint64 p) {
     return (p & (PGSIZE - 1)) == 0;
 }
 
-static void region_build(alloc_region_t *r, uint64 begin, uint64 end, char *name) {
-    if (!is_page_aligned(begin) || !is_page_aligned(end) || begin > end) {
+static void region_build(alloc_region_t *r, uint64 begin, uint64 end, char *name)
+{
+    if (!is_page_aligned(begin) || !is_page_aligned(end) || begin > end)
         panic("pmem: bad region");
-    }
 
-    r->begin     = begin;
-    r->end       = end;
+    r->begin = begin;
+    r->end   = end;
     r->allocable = 0;
     spinlock_init(&r->lk, name);
 
-    // 初始化链表头为空
     r->list_head.next = 0;
+    page_node_t *tail = &r->list_head;
 
-    // 把每个物理页挂到链表里
     for (uint64 p = begin; p + PGSIZE <= end; p += PGSIZE) {
         page_node_t *node = (page_node_t*)p;
-        node->next = r->list_head.next;
-        r->list_head.next = node;
+        node->next = 0;
+        tail->next = node;
+        tail = node;
         r->allocable++;
     }
 }
