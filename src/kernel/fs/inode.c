@@ -297,7 +297,6 @@ uint32 locate_or_add_block(uint32 *index, uint32 lbn)
 */
 void inode_rw(inode_t *ip, bool write)
 {
-    printf("inode_rw begin\n");
 	buffer_t *buf = buffer_get(inode_block(ip->inode_num));
 	inode_disk_t *dip =
 	(inode_disk_t *)buf->data + inode_offset(ip->inode_num);
