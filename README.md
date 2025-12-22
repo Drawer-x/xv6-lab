@@ -274,8 +274,8 @@ virtio 磁盘驱动
 
 **测试目的**：验证磁盘、buffer、文件系统初始化是否成功
 
-📸 测试截图位置：
-`./pictures/test-1.png`
+📸 测试截图：
+![test-1](./pictures/test-1.png)
 
 ---
 
@@ -283,8 +283,8 @@ virtio 磁盘驱动
 
 **测试目的**：验证 data bitmap / inode bitmap 的正确性
 
-📸 测试截图位置：
-`./pictures/test-2.png`
+📸 测试截图：
+![test-2](./pictures/test-2.png)
 
 ---
 
@@ -296,10 +296,10 @@ virtio 磁盘驱动
 * 验证 LRU 链表调整
 * 验证 flush 释放物理内存
 
-📸 测试截图位置：
+📸 测试截图：
 
-* `./pictures/test-3(1).png`
-* `./pictures/test-3(2).png`
+![test-3(1)](./pictures/test-3(1).png)
+![test-3(2)](./pictures/test-3(2).png)
 
 ---
 
@@ -308,6 +308,4 @@ virtio 磁盘驱动
 Lab-7 是从“内存型内核”迈向“持久化文件系统”的关键一步，为 Lab-8 的 inode 与层次化文件系统奠定了完整基础。
 
 ```
-
----
 
