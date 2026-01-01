@@ -5,33 +5,33 @@ static uint64 (*syscalls[])(void) = {
     [SYS_brk]          = sys_brk,
     [SYS_mmap]         = sys_mmap,
     [SYS_munmap]       = sys_munmap,
-    [SYS_print_str]    = sys_print_str,
-    [SYS_print_int]    = sys_print_int,
-    [SYS_getpid]       = sys_getpid,
     [SYS_fork]         = sys_fork,
     [SYS_wait]         = sys_wait,
     [SYS_exit]         = sys_exit,
     [SYS_sleep]        = sys_sleep,
-
-    // **新增：磁盘/缓冲/bitmap 相关 syscall**
-    [SYS_alloc_block]  = sys_alloc_block,
-    [SYS_free_block]   = sys_free_block,
-    [SYS_alloc_inode]  = sys_alloc_inode,
-    [SYS_free_inode]   = sys_free_inode,
-    [SYS_show_bitmap]  = sys_show_bitmap,
-    [SYS_get_block]    = sys_get_block,
-    [SYS_read_block]   = sys_read_block,
-    [SYS_write_block]  = sys_write_block,
-    [SYS_put_block]    = sys_put_block,
-    [SYS_show_buffer]  = sys_show_buffer,
-    [SYS_flush_buffer] = sys_flush_buffer,
+    [SYS_getpid]       = sys_getpid,
+    [SYS_exec]         = sys_exec,
+    [SYS_open]         = sys_open,
+    [SYS_close]        = sys_close,
+    [SYS_read]         = sys_read,
+    [SYS_write]        = sys_write,
+    [SYS_lseek]        = sys_lseek,
+    [SYS_dup]          = sys_dup,
+    [SYS_fstat]        = sys_fstat,
+    [SYS_get_dentries] = sys_get_dentries,
+    [SYS_mkdir]        = sys_mkdir,
+    [SYS_chdir]        = sys_chdir,
+    [SYS_print_cwd]    = sys_print_cwd,
+    [SYS_link]         = sys_link,
+    [SYS_unlink]       = sys_unlink,
+    [SYS_pmem_stat]    = sys_pmem_stat,
 };
 
 void syscall(void)
 {
     proc_t *p = myproc();
     uint64 sysnum = p->tf->a7;
-
+    
     if (sysnum >= 0 && sysnum <= SYS_MAX_NUM && syscalls[sysnum]) {
         uint64 ret = syscalls[sysnum]();
         p->tf->a0 = ret;

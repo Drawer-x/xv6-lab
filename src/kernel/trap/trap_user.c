@@ -29,7 +29,7 @@ void trap_user_handler()
 
     // 记录用户 EPC
     tf->epc = r_sepc();
-
+    
     uint64 scause = r_scause();
     int trap_id = scause & 0xf;
 
@@ -69,6 +69,9 @@ void trap_user_handler()
             p->ustack_npage = new_n;
             break;
         }
+        case 12: // Instruction page fault
+            printf("Instruction page fault: epc=%p stval=%p\n", tf->epc, r_stval());
+            panic("trap_user_handler");
         default:
             printf("unexpected user exception id=%d sepc=%p stval=%p\n",
                    trap_id, tf->epc, r_stval());

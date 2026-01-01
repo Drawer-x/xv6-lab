@@ -310,7 +310,8 @@ void uvm_munmap(uint64 begin, uint32 npages)
 /*------------------part-3: 用户空间heap和stack管理相关------------------*/
 
 // 用户堆空间增加, 返回新的堆顶地址 (注意栈顶最大值限制)
-uint64 uvm_heap_grow(pgtbl_t pgtbl, uint64 cur_heap_top, uint32 len) 
+// flag参数用于设置页面的权限(如PTE_R | PTE_W | PTE_X等)
+uint64 uvm_heap_grow(pgtbl_t pgtbl, uint64 cur_heap_top, uint32 len, int flag) 
 {
     if (len == 0) return cur_heap_top;
     uint64 new_top = cur_heap_top + len;
@@ -327,7 +328,7 @@ uint64 uvm_heap_grow(pgtbl_t pgtbl, uint64 cur_heap_top, uint32 len)
         uint64 map_va = ALIGN_UP(va, PGSIZE);
         if (map_va > va) va = map_va;
         
-        vm_mappages(pgtbl, va, page, PGSIZE, PTE_R | PTE_W | PTE_U | PTE_V);
+        vm_mappages(pgtbl, va, page, PGSIZE, flag | PTE_U | PTE_V);
         va += PGSIZE;
     }
 

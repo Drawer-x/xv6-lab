@@ -16,6 +16,14 @@ void uart_intr(void);
 void uart_puts(const char *s);
 void uart_putint(int num);
 void uart_puthex(uint64 addr);
+
+/* console.c: 控制台行缓冲输入输出 */
+
+void cons_init(void);
+void console_putc(int c);
+void cons_edit(int c);
+uint32 cons_read(uint32 len, uint64 dst, bool is_user_dst);
+uint32 cons_write(uint32 len, uint64 src, bool is_user_src);
 /* cpu.c: 获得CPU信息 */
 
 int mycpuid(void);

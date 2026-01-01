@@ -46,3 +46,15 @@ typedef struct cpu
     proc_t *proc;   // cpu上运行的进程
     context_t ctx;  // 内核自身上下文
 } cpu_t;
+
+// console
+#define CONSOLE_INPUT_BUF 128
+
+typedef struct console
+{
+    spinlock_t lk;
+    char buf[CONSOLE_INPUT_BUF];
+    int read_idx;
+    int writ_idx;
+    int edit_idx;
+} console_t;

@@ -2,7 +2,7 @@
 #include "../mem/mod.h"
 #include "../lib/mod.h"
 #include "../../user/initcode.h"
-#include "../fs/method.h"   // fs_init()
+#include "../fs/mod.h"   // 文件系统相关
 
 #define initcode target_user_initcode
 #define initcode_len target_user_initcode_len
@@ -44,14 +44,26 @@ static int alloc_pid()
 void proc_return()
 {
     static int fs_inited = 0;
+    proc_t *p = myproc();
 
-    // proczero 第一次返回用户态之前，做文件系统初始化（先置位再初始化，防止并发/重入）
+    // proczero 第一次返回用户态之前，做文件系统初始化
     if (!fs_inited) {
         fs_inited = 1;
         fs_init();
+        
+        // 设置当前工作目录为根目录
+        p->cwd = inode_get(ROOT_INODE);
+        
+        // 为proczero设置标准输入输出错误
+        file_t *f0 = file_open("/dev/stdin", O_RDONLY);
+        file_t *f1 = file_open("/dev/stdout", O_WRONLY);
+        file_t *f2 = file_open("/dev/stderr", O_WRONLY);
+        if (f0) p->open_file[0] = f0;
+        if (f1) p->open_file[1] = f1;
+        if (f2) p->open_file[2] = f2;
     }
 
-    spinlock_release(&myproc()->lk);
+    spinlock_release(&p->lk);
     trap_user_return();
 }
 
@@ -82,6 +94,12 @@ void proc_init()
         p->kstack = 0;
         
         memset(&p->ctx, (uint8)0, (uint32)sizeof(context_t));
+        
+        // 初始化文件系统相关字段
+        for (int j = 0; j < 16; j++) {
+            p->open_file[j] = NULL;
+        }
+        p->cwd = NULL;
     }
 }
 
@@ -218,6 +236,20 @@ void proc_free(proc_t *p)
             pmem_free(tf_pa, true); // 释放trapframe占用的物理页
         }
         p->tf = NULL; // 清空trapframe指针，避免野指针
+    }
+
+    // 释放打开的文件
+    for (int i = 0; i < 16; i++) {
+        if (p->open_file[i] != NULL) {
+            file_close(p->open_file[i]);
+            p->open_file[i] = NULL;
+        }
+    }
+    
+    // 释放当前工作目录
+    if (p->cwd != NULL) {
+        inode_put(p->cwd);
+        p->cwd = NULL;
     }
 
     // 清空其他字段（保持原有逻辑）
@@ -371,6 +403,20 @@ int proc_fork()
     child->heap_top    = parent->heap_top;
     child->ustack_npage= parent->ustack_npage;
     child->mmap        = parent->mmap;   // 目前保持与你现有逻辑一致（浅拷贝）
+    
+    // 5) 复制打开文件表和当前工作目录
+    for (int i = 0; i < 16; i++) {
+        if (parent->open_file[i] != NULL) {
+            child->open_file[i] = file_dup(parent->open_file[i]);
+        } else {
+            child->open_file[i] = NULL;
+        }
+    }
+    if (parent->cwd != NULL) {
+        child->cwd = inode_dup(parent->cwd);
+    } else {
+        child->cwd = NULL;
+    }
 
     // 5) 复制 trapframe，并修正与“子进程内核栈/当前核”相关的字段
     if (parent->tf != NULL && child->tf != NULL) {
@@ -384,6 +430,7 @@ int proc_fork()
     child->tf->kernel_sp     = child->kstack + PGSIZE;  // 子进程返回内核时使用的栈顶
     child->tf->kernel_hartid = r_tp();                  // 当前 hart
     child->tf->kernel_satp   = r_satp();                // 返回内核时应切回的 satp（内核页表）
+    child->tf->a0            = 0;                       // 子进程fork返回0
     // kernel_trap/epc/sp 已被复制自父进程，通常无需改动：
     // - kernel_trap 指向 trap_user_handler（在 proc_make_first 中已设置）
     // - epc 是用户空间返回地址
@@ -454,7 +501,7 @@ static void proc_try_wakeup(proc_t *p)
     if (parent->state == SLEEPING && parent->sleep_space == parent) {
         parent->state = RUNNABLE;
         //parent->sleep_space = NULL;
-        printf("proc %d is wakeup!\n", parent->pid);
+        //printf("proc %d is wakeup!\n", parent->pid);
     }
     spinlock_release(&parent->lk);
 }
@@ -542,7 +589,7 @@ int proc_wait(uint64 user_addr)
                 // 找到目标子进程，记录PID和退出码
                 int pid = child->pid;
                 int exit_code = child->exit_code;
-                printf("proc %d is wakeup!\n", parent->pid);
+                //printf("proc %d is wakeup!\n", parent->pid);
                 // 3. 将退出码写入用户态地址（用uvm_copyout确保安全）
                 if (user_addr != 0) {
                     uvm_copyout(parent->pgtbl, user_addr, (uint64)&exit_code, sizeof(int));
@@ -686,14 +733,8 @@ void proc_scheduler()
             }
 
             if (p->state == RUNNABLE) {
-                // 将其置为 RUNNING，绑定到当前 CPU
                 p->state = RUNNING;
                 c->proc = p;
-
-                printf("proc %d is running...\n", p->pid);
-
-                // 切到进程（注意：返回到这里时，按照约定 p->lk 仍然是“被持有”的，
-                // 但可能是由不同路径持有；因此释放动作只在 got_here==true 时做）
                 swtch(&c->ctx, &p->ctx);
             }
 

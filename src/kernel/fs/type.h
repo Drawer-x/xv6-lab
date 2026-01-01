@@ -192,3 +192,60 @@ typedef struct dentry {
 #define INODE_PER_BLOCK (BLOCK_SIZE / sizeof(inode_disk_t))
 #define DENTRY_PER_BLOCK  (BLOCK_SIZE / sizeof(dentry_t))
 #define COUNT_BLOCKS(ele_num, ele_per_block)  (((ele_num) + (ele_per_block) - 1) / (ele_per_block)) 
+
+/*-------------------关于文件--------------------*/
+
+#define N_FILE 128                // 文件资源池大小
+#define N_OPEN_FILE 16            // 每个进程最多打开的文件数
+
+/* 文件打开模式 - 与用户空间 help.h 一致 */
+#define O_CREATE  0x01          // 如果不存在则创建 (OPEN_CREATE)
+#define O_RDONLY  0x02          // 只读 (OPEN_READ)
+#define O_WRONLY  0x04          // 只写 (OPEN_WRITE)
+#define O_RDWR    (O_RDONLY | O_WRONLY)  // 读写
+#define O_TRUNC   0x08          // 截断文件
+
+/* lseek偏移标志 - 与用户空间help.h一致 */
+#define LSEEK_SET     0        // file->offset = lseek_offset
+#define LSEEK_ADD     1        // file->offset += lseek_offset
+#define LSEEK_SUB     2        // file->offset -= lseek_offset
+
+/* 文件结构体 */
+typedef struct file {
+    inode_t *ip;        // 对应的inode
+    bool readable;      // 是否可读
+    bool writable;      // 是否可写
+    uint32 offset;      // 读/写指针的偏移量
+    uint32 ref;         // 引用数 (lk_file_table保护)
+} file_t;
+
+/* 文件状态结构体 - 用于fstat系统调用 */
+typedef struct file_stat {
+    uint16 type;        // 文件类型
+    uint16 nlink;       // 链接数
+    uint32 size;        // 文件大小
+    uint32 inode_num;   // inode号
+    uint32 offset;      // 读写偏移量
+} file_stat_t;
+
+/*-------------------关于设备文件--------------------*/
+
+#define N_DEVICE 6                // 设备数量
+
+/* 设备主设备号定义 */
+#define DEV_STDIN   1             // 标准输入
+#define DEV_STDOUT  2             // 标准输出
+#define DEV_STDERR  3             // 标准错误输出
+#define DEV_ZERO    4             // 零设备
+#define DEV_NULL    5             // 空设备
+#define DEV_GPT0    6             // GPT设备(彩蛋)
+
+/* 设备表项 */
+typedef struct device {
+    char *name;                   // 设备名(如"/dev/stdin")
+    uint16 major;                 // 主设备号
+    bool readable;                // 是否可读
+    bool writable;                // 是否可写
+    uint32 (*read)(uint32 len, uint64 dst, bool is_user_dst);   // 读函数
+    uint32 (*write)(uint32 len, uint64 src, bool is_user_src);  // 写函数
+} device_t; 

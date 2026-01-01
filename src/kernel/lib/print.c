@@ -11,11 +11,12 @@ static spinlock_t print_lk;
 /* 如果发生panic, UART的停止标志 */
 volatile int panicked = 0;
 
-/* 初始化uart + 初始化printf锁 */
+/* 初始化uart + 初始化printf锁 + 初始化控制台 */
 void print_init(void)
 {
     uart_init();
     spinlock_init(&print_lk, "printf");
+    cons_init();
 }
 
 /* %d / %u / %x 的公共实现 */

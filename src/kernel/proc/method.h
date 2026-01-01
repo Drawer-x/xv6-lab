@@ -1,4 +1,6 @@
 #pragma once
+#include "type.h"
+#include "../lock/type.h"
 
 // proc.c: 进程管理相关
 
@@ -16,3 +18,6 @@ void proc_sleep(void *sleep_space, spinlock_t *lk); // 进程睡眠
 void proc_wakeup(void *sleep_space);                // 进程唤醒
 void proc_sched();                                  // 进程切换到调度器
 void proc_scheduler();                              // 调度器选择合适的进程执行
+
+// exec.c: ELF文件执行
+int proc_exec(char *path, char **argv);             // 执行ELF文件

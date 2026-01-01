@@ -547,9 +547,14 @@ uint32 inode_write_data(inode_t *ip,
         if (n == 0)
             printf("inode_write_data: n == 0");
 
-        memcpy(buf->data + block_offset,
-               (char *)src + tot,
-               n);
+        if (user) {
+            // 从用户空间复制数据
+            proc_t *p = myproc();
+            uvm_copyin(p->pgtbl, (uint64)(buf->data + block_offset), (uint64)src + tot, n);
+        } else {
+            // 从内核空间复制数据
+            memcpy(buf->data + block_offset, (char *)src + tot, n);
+        }
 
         buffer_write(buf);
         buffer_put(buf);

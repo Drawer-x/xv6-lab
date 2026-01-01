@@ -91,6 +91,10 @@ enum proc_state
     ZOMBIE,   // 濒临死亡
 };
 
+// 外部结构体前向声明
+struct file;
+struct inode;
+
 // 进程
 typedef struct proc
 {
@@ -111,7 +115,14 @@ typedef struct proc
 
     uint64 kstack;       // 内核栈的虚拟地址
     context_t ctx;       // 内核态进程上下文
+    
+    // 文件系统相关 (暂时注释以测试稳定性)
+    struct file *open_file[16];  // 打开文件表
+    struct inode *cwd;           // 当前工作目录
 } proc_t;
+
+// 检查proc_t大小，确保没有意外增长
+// _Static_assert(sizeof(proc_t) < 512, "proc_t too large");
 
 // 系统中最多同时存在N_PROC个进程
 #define N_PROC 32

@@ -79,15 +79,8 @@ void uart_intr(void)
         int c = uart_getc_sync();
         if (c == -1) break;
 
-        // 原有字符处理逻辑（换行、退格、回显）
-        if (c == '\r') uart_putc_sync('\n');
-        else if (c == '\b' || c == 127)
-        {
-            uart_putc_sync('\b');
-            uart_putc_sync(' ');
-            uart_putc_sync('\b');
-        }
-        else uart_putc_sync(c);
+        // 调用控制台编辑函数处理输入
+        cons_edit(c);
     }
 }
 // 输出字符串（循环调用单个字符输出）

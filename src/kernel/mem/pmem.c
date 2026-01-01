@@ -98,3 +98,17 @@ alloc_region_t* get_user_region(void) {
 alloc_region_t* get_kern_region(void) {
     return &kern_region;
 }
+
+/* 获取当前可用内存页面数量 */
+void pmem_stat(uint32 *kern_free, uint32 *user_free) {
+    if (kern_free != NULL) {
+        spinlock_acquire(&kern_region.lk);
+        *kern_free = kern_region.allocable;
+        spinlock_release(&kern_region.lk);
+    }
+    if (user_free != NULL) {
+        spinlock_acquire(&user_region.lk);
+        *user_free = user_region.allocable;
+        spinlock_release(&user_region.lk);
+    }
+}

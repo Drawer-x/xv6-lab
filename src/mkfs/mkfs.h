@@ -79,6 +79,7 @@ typedef struct inode_disk {
 /*------------------------关于目录项(dentry)---------------------*/
 
 #define MAXLEN_FILENAME 60            // 文件名的最大长度
+#define ELF_MAXARGS     32            // 最大参数/文件数量
 #define INVALID_INODE_NUM 0xFFFFFFFF  // 无效inode_num
 
 /* 目录项(64 Byte) */

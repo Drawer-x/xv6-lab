@@ -1,6 +1,12 @@
 # 这个文件负责公共的配置
 
-TOOLPREFIX = riscv64-linux-gnu-
+# 自动检测 RISC-V 工具链前缀
+TOOLPREFIX ?= $(shell \
+    if which riscv64-linux-gnu-gcc > /dev/null 2>&1; then echo riscv64-linux-gnu-; \
+    elif which riscv64-unknown-elf-gcc > /dev/null 2>&1; then echo riscv64-unknown-elf-; \
+    elif which riscv64-elf-gcc > /dev/null 2>&1; then echo riscv64-elf-; \
+    else echo riscv64-linux-gnu-; fi)
+
 CC = ${TOOLPREFIX}gcc
 LD = ${TOOLPREFIX}ld
 OBJCOPY = ${TOOLPREFIX}objcopy
