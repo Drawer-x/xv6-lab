@@ -79,10 +79,11 @@ static uint32 null_write(uint32 len, uint64 src, bool is_user_src) {
 }
 
 /* GPT设备写入 - 预设问答 */
-static uint32 gpt0_write(uint32 len, uint64 src, bool is_user_src) {
+static uint32 gpt0_write(uint32 len, uint64 src, bool is_user_src)
+{
     char buf[128];
     uint32 read_len = len < 127 ? len : 127;
-    
+
     if (is_user_src) {
         proc_t *p = myproc();
         if (p) {
@@ -92,20 +93,39 @@ static uint32 gpt0_write(uint32 len, uint64 src, bool is_user_src) {
         memmove(buf, (void*)src, read_len);
     }
     buf[read_len] = '\0';
-    
-    // 简单的问答系统
-    if (strncmp(buf, "hello", 5) == 0) {
-        printf("GPT0: Hello! I'm a simple GPT device.\n");
-    } else if (strncmp(buf, "help", 4) == 0) {
-        printf("GPT0: Available commands: hello, help, time, bye\n");
-    } else if (strncmp(buf, "time", 4) == 0) {
-        printf("GPT0: I don't have a clock, sorry!\n");
-    } else if (strncmp(buf, "bye", 3) == 0) {
-        printf("GPT0: Goodbye!\n");
+
+    // === 最小改动：做一个小写副本用于匹配（兼容 Hello/GOOD JOB 等） ===
+    char key[128];
+    memmove(key, buf, read_len + 1);
+    for (uint32 i = 0; key[i]; i++) {
+        if (key[i] >= 'A' && key[i] <= 'Z')
+            key[i] = key[i] - 'A' + 'a';
+    }
+
+    // === 按标准输出改问答 ===
+    if (strncmp(key, "hello", 5) == 0) {
+        printf("Hi, I am gpt0!\n");
+
+    } else if (strncmp(key, "guess who i am", 14) == 0) {
+        proc_t *p = myproc();
+        if (p)
+            printf("Your procid is %d and name is %s.\n", p->pid, p->name);
+        else
+            printf("Your procid is -1 and name is unknown.\n");
+
+    } else if (strncmp(key, "how many free memory left", 25) == 0) {
+        uint32 kfree = 0, ufree = 0;
+        pmem_stat(&kfree, &ufree);
+        printf("We have %d free pages in kernel space, %d free pages in user space!\n",
+               kfree, ufree);
+
+    } else if (strncmp(key, "good job", 8) == 0) {
+        printf("Thanks for your kind words!\n");
+
     } else {
         printf("GPT0: I don't understand '%s'\n", buf);
     }
-    
+
     return len;
 }
 
