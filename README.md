@@ -73,7 +73,7 @@
 实现 `proc_exec`，将文件系统、内存系统、进程系统真正串联起来，使用户程序可以：
 
 fork → exec → 运行 ELF → 使用文件系统 → 正常退出
-````
+
 
 ---
 
@@ -107,7 +107,7 @@ file 抽象层（fs.c）
 inode / dentry / device
    ↓
 磁盘 or 设备
-```
+
 
 * **file** 是进程视角的“文件”
 * **inode** 是系统视角的“数据”
@@ -150,7 +150,7 @@ file.txt
      │         │         │
    file      file      file
  (proc A)  (proc B)  (proc C)
-```
+
 
 * inode 负责数据的持久化
 * file 负责：
@@ -175,7 +175,7 @@ file.txt
        3. 构造用户栈
        4. 切换地址空间
        5. 跳转到用户入口
-```
+
 
 exec 是本实验中**系统性最强的一步**，横跨：
 
