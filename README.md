@@ -1,4 +1,4 @@
-# LAB-9：文件系统（文件管理与全系统整合）实验报告
+# LAB-9：文件系统（文件管理与全系统整合）
 
 ## 一、过程性日志（按测试点与模块推进）
 
@@ -204,25 +204,25 @@ exec 是本实验中**系统性最强的一步**，横跨：
 
 ### test_1：基础文件系统
 
-![test_1](picture/test1.png)
+![test_1](picture/test_1.png)
 
 ---
 
 ### test_2：目录与路径解析
 
-![test_2](picture/test2.png)
+![test_2](picture/test_2.png)
 
 ---
 
 ### test_3：文件与设备文件
 
-![test_3](picture/test3.png)
+![test_3](picture/test_3.png)
 
 ---
 
 ### test_4：全系统整合测试
 
-![test_4](picture/test4.png)
+![test_4](picture/test_4.png)
 
 test_4 验证了：
 
